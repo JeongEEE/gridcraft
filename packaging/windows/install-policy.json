@@ -1,7 +1,7 @@
 {
-  "id": "gridcraft",
-  "name": "GridCraft",
-  "upgradeCode": "5511327B-F305-41BE-92D0-EB84944E7C4D",
+  "id": "grid",
+  "name": "Grid",
+  "upgradeCode": "D0FEAEC3-C655-56AA-936E-56F8A764065E",
   "sources": [
     "gridcraft.wxs"
   ],
@@ -9,139 +9,139 @@
   "localization": [],
   "extensions": [],
   "payloads": [
-    "gridcraft-cli.exe",
-    "gridcraft.exe"
+    "grid-cli.exe",
+    "grid.exe"
   ],
   "registry": [
     [
       "-1",
-      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\gridcraft.exe",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\grid.exe",
       "",
       "[#GridcraftExe]"
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.Workbook",
+      "Software\\Classes\\Grid.Workbook",
       "",
-      "GridCraft Workbook"
+      "Grid Workbook"
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.Workbook\\DefaultIcon",
+      "Software\\Classes\\Grid.Workbook\\DefaultIcon",
       "",
       "\"[#GridcraftExe]\",0"
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.Workbook\\shell\\open\\command",
+      "Software\\Classes\\Grid.Workbook\\shell\\open\\command",
       "",
       "\"[#GridcraftExe]\" \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.TextData",
+      "Software\\Classes\\Grid.TextData",
       "",
-      "GridCraft Text Data"
+      "Grid Text Data"
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.TextData\\DefaultIcon",
+      "Software\\Classes\\Grid.TextData\\DefaultIcon",
       "",
       "\"[#GridcraftExe]\",0"
     ],
     [
       "-1",
-      "Software\\Classes\\GridCraft.TextData\\shell\\open\\command",
+      "Software\\Classes\\Grid.TextData\\shell\\open\\command",
       "",
       "\"[#GridcraftExe]\" \"%1\""
     ],
     [
       "-1",
       "Software\\Classes\\.xlsx\\OpenWithProgids",
-      "GridCraft.Workbook",
-      "GridCraft.Workbook"
+      "Grid.Workbook",
+      "Grid.Workbook"
     ],
     [
       "-1",
       "Software\\Classes\\.xlsm\\OpenWithProgids",
-      "GridCraft.Workbook",
-      "GridCraft.Workbook"
+      "Grid.Workbook",
+      "Grid.Workbook"
     ],
     [
       "-1",
       "Software\\Classes\\.xlsb\\OpenWithProgids",
-      "GridCraft.Workbook",
-      "GridCraft.Workbook"
+      "Grid.Workbook",
+      "Grid.Workbook"
     ],
     [
       "-1",
       "Software\\Classes\\.ods\\OpenWithProgids",
-      "GridCraft.Workbook",
-      "GridCraft.Workbook"
+      "Grid.Workbook",
+      "Grid.Workbook"
     ],
     [
       "-1",
       "Software\\Classes\\.csv\\OpenWithProgids",
-      "GridCraft.TextData",
-      "GridCraft.TextData"
+      "Grid.TextData",
+      "Grid.TextData"
     ],
     [
       "-1",
       "Software\\Classes\\.tsv\\OpenWithProgids",
-      "GridCraft.TextData",
-      "GridCraft.TextData"
+      "Grid.TextData",
+      "Grid.TextData"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities",
+      "Software\\Grid\\Capabilities",
       "ApplicationName",
-      "GridCraft"
+      "Grid"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities",
+      "Software\\Grid\\Capabilities",
       "ApplicationDescription",
       "Open-source spreadsheet for .xlsx, CSV and TSV files"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      "Software\\Grid\\Capabilities\\FileAssociations",
       ".xlsx",
-      "GridCraft.Workbook"
+      "Grid.Workbook"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      "Software\\Grid\\Capabilities\\FileAssociations",
       ".xlsm",
-      "GridCraft.Workbook"
+      "Grid.Workbook"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      "Software\\Grid\\Capabilities\\FileAssociations",
       ".csv",
-      "GridCraft.TextData"
+      "Grid.TextData"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Capabilities\\FileAssociations",
+      "Software\\Grid\\Capabilities\\FileAssociations",
       ".tsv",
-      "GridCraft.TextData"
+      "Grid.TextData"
     ],
     [
       "-1",
       "Software\\RegisteredApplications",
-      "GridCraft",
-      "Software\\GridCraft\\Capabilities"
+      "Grid",
+      "Software\\Grid\\Capabilities"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Installer",
+      "Software\\Grid\\Installer",
       "DesktopShortcut",
       "[DESKTOPSHORTCUT]"
     ],
     [
       "-1",
-      "Software\\GridCraft\\Installer",
+      "Software\\Grid\\Installer",
       "DesktopShortcutComponent",
       "#1"
     ]

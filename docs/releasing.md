@@ -1,3 +1,5 @@
+> **Grid personal fork:** use [`custom-release.md`](custom-release.md). The upstream process below is retained as reference.
+
 # Releasing GridCraft
 
 Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds

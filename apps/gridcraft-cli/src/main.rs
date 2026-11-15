@@ -541,10 +541,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
     let backend: Box<dyn Backend> = match a.opt("connect") {
         Some(c) => {
             let addr = control_addr(c);
-            Box::new(
-                Remote::connect(&addr)
-                    .map_err(|e| format!("cannot connect to the GridCraft app at {addr}: {e} (start it with `gridcraft --control PORT`)"))?,
-            )
+            Box::new(Remote::connect(&addr).map_err(|e| format!("cannot connect to the Grid app at {addr}: {e} (start Grid with --control PORT)"))?)
         }
         None => {
             let session = match (a.opt("in"), a.opt("sample")) {
@@ -578,8 +575,7 @@ fn send(args: &[String]) -> Result<(), String> {
         return Err(format!("unexpected argument `{x}`"));
     }
     let addr = control_addr(port);
-    let mut r = Remote::connect(&addr)
-        .map_err(|e| format!("cannot connect to the GridCraft app at {addr}: {e} (start it with `gridcraft --control {port}`)"))?;
+    let mut r = Remote::connect(&addr).map_err(|e| format!("cannot connect to the Grid app at {addr}: {e} (start Grid with --control {port})"))?;
     let v = r.call(method, params)?;
     outln!("{}", pretty(&v));
     Ok(())

@@ -1,3 +1,21 @@
+# Grid personal fork rules
+
+These rules implement the repository owner's fork workflow and take precedence over the
+upstream contribution workflow below for work in this fork.
+
+- `main` mirrors `upstream/main`; never commit personal changes or merge `my-custom` into it.
+- Develop, commit and push personal changes on `my-custom`. Stage only the task's explicit paths.
+- `my-custom-release` receives reviewed `my-custom` changes only for an authorized release run.
+- Upstream issue claims, upstream PR requirements and shared-CI-only policies apply when
+  contributing upstream. Do not post upstream issues/comments for personal fork work.
+- The fork-specific `.github/workflows/release-custom.yml` owns Windows/macOS draft releases.
+  Keep upstream workflows intact; never publish a release without user authorization.
+- Keep app name `Grid`, bundle id `io.github.jeongeee.grid`, updater app id `grid`, and
+  updater repository `JeongEEE/gridcraft` independent from upstream. Cargo names remain unchanged.
+- Follow `docs/custom-release.md` for versioning and packaging. Maintain the Grid section in
+  `MyProjectsWiki/wiki/Grid/` alongside architectural or operational changes, then run its sync script.
+- Commit messages are Korean Conventional Commits, without generated/coauthor attribution.
+
 <!-- craft-house-rules:start core source=dde09ea31e2e457f5b4653a6e76f7cdf55944bdf sha256=540e6cea75d12d0710c3dca89658328e81e508ecef102446ca5bb95b7c0b92bb -->
 ## House rules
 
