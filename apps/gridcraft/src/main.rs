@@ -60,6 +60,7 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.1.show(&mut self.0, ui);
+        gridcraft_update::helper::acknowledge_startup();
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
@@ -267,15 +268,15 @@ fn main() -> eframe::Result<()> {
             let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("gridcraft: {report}\n"));
         }
     }));
-    let args: Vec<String> = std::env::args().skip(1).collect();
     // The restart helper a self-update spawns: it finishes the swap and relaunches, then exits.
-    if let Some(done) = craft_update::self_update::finish(&gridcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if let Some(done) = gridcraft_update::helper::finish(&raw) {
         if let Err(e) = done {
             eprintln!("Grid update helper failed: {e}");
             std::process::exit(1);
         }
         return Ok(());
     }
+    let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("Grid {}", env!("CARGO_PKG_VERSION"));
         return Ok(());

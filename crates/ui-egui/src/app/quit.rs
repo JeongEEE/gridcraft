@@ -57,7 +57,10 @@ impl SheetApp {
     /// can't be entered.
     pub fn answer_save_changes(&mut self, answer: SaveAnswer, quitting: bool, ctx: &egui::Context) -> bool {
         match answer {
-            SaveAnswer::Cancel => {}
+            SaveAnswer::Cancel => {
+                #[cfg(not(target_arch = "wasm32"))]
+                crate::updates_ui::cancel_restart(self);
+            }
             SaveAnswer::DontSave => {
                 self.run_or_alert("file.close", json!({"force": true, "document": true}));
                 if quitting {
@@ -86,6 +89,8 @@ impl SheetApp {
     /// window; Cancel on any of them stops the quit. A draft its
     /// workbook refuses stops the quit too, with its window in front and the reason shown.
     pub fn request_quit(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::updates_ui::cancel_restart(self);
         while let Some(window) = self.parked_window_with_draft() {
             self.enter_window(window);
             if self.settle_drafts().is_err() {
