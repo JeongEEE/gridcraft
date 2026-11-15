@@ -114,7 +114,7 @@ git switch my-custom
 ```
 
 `.github/workflows/release-custom.yml`은 이 포크의 배포 브랜치에서만 실행된다.
-macOS와 Windows 빌드가 모두 성공해야 네 파일과 `SHA256SUMS.txt`를 갖춘 draft를 만든다.
+macOS와 Windows 빌드가 모두 성공해야 네 패키지와 체크섬·서명된 업데이트 목록을 갖춘 draft를 만든다.
 
 - `grid-<버전>-macos-universal.dmg`: Apple Silicon·Intel용 Grid.app.
 - `grid-cli-<버전>-macos-universal.zip`: macOS CLI.
@@ -125,23 +125,72 @@ draft는 저장소 협업자만 볼 수 있다. 실제 산출물과 검증 결�
 GitHub Releases에서 발행한다. 이미 공개한 버전을 덮어쓰지 않는다. draft 재실행은 같은
 버전의 산출물과 대상 커밋을 갱신한다. 원본 전체 플랫폼 릴리스 workflow는 이 포크에서 사용하지 않는다.
 
-## 업데이트와 서명 제약
+## 자동 업데이트
 
-앱 시작 때와 Help의 업데이트 확인에서 **이 포크의 공개 릴리스만** 조회한다.
-draft는 업데이트로 안내하지 않는다. 소스 `main` 동기화는 앱 업데이트와 별개이며,
-개인 변경을 포함한 새 설치 파일을 배포해야 설치된 앱도 갱신된다.
+시작 시, Help의 업데이트 확인, 실행 중 6시간 주기로 **이 포크의 공개 릴리스만** 확인한다.
+draft나 원본 저장소의 릴리스는 설치하지 않는다. `main` 동기화는 설치 앱 업데이트와 별개다.
 
-현재 포크는 두 운영체제 모두 **알림·다운로드 전용**이다. 자동으로 새 버전을 확인하지만
-사용자가 새 설치 파일을 내려받아 설치한다. 앱이 직접 교체되거나 재시작하지 않는다.
+설치된 Mac 앱, Windows MSI·포터블은 새 버전을 백그라운드 다운로드하고 검증한다.
+준비되면 **재시작하여 업데이트 / 나중에**를 표시한다. 재시작은 기존 저장 확인을 거친다.
+저장 취소·편집 오류·매크로 닫기 취소는 업데이트 종료 예약도 취소한다. 일반 종료만으로는
+설치하지 않는다. 나중에를 고른 준비 파일은 현재 실행 중 유지하고, 앱을 종료한 뒤에는
+다음 실행에서 다시 확인·다운로드한다.
 
-macOS 공유 설치기는 원본 ArtCraft 개발팀의 Apple 서명을 고정 검증하므로 이 포크의
-ad-hoc 앱은 그 자동 설치 경로를 사용할 수 없다. Windows도 미서명 파일의 자동 설치를
-막는다. 원본 검증을 우회하지 않으며, 포크용 자동 설치는 별도 서명 정책과 실제
-구버전→신버전 시험을 갖춘 뒤 도입한다. 인증서를 추가하는 것만으로 활성화되는 기능은 아니다.
+`crates/update`는 인증·다운로드·플랫폼 설치를, `ui-egui/src/updates_ui.rs`는 알림과
+저장 확인 연결을 담당한다. 복사된 실행 파일이 helper로 시작해 부모 종료를 기다리고,
+다른 Grid 프로세스가 남아 있으면 설치하지 않는다. 설정과 사용자 문서는 교체 대상이 아니다.
 
-macOS는 ad-hoc 서명·미공증 배포이므로 다운로드 후 OS의 실행 확인이 필요할 수 있다.
-Windows에도 미서명 앱 확인이 나타날 수 있다. 비밀키를 소스에 넣거나 유료 계정·인증서를
-자동 구매하지 않는다. 기존 원본 앱과 문서는 설치·업데이트 실험 대상으로 삼지 않는다.
+Mac은 DMG를 readonly로 마운트해 Grid 번들 ID·버전·엄격한 codesign을 검사한 후 같은
+볼륨에서 번들을 교체한다. Windows MSI는 원래 설치 문맥과 폴더를 유지하며, 모두를 위한
+설치는 OS 권한 승인이 필요할 수 있다. 포터블은 ZIP의 정해진 배포 파일만 교체한다.
+Mac·포터블은 교체나 첫 화면 시작 실패 시 이전 파일을 복원하고, MSI 설치 실패는 Windows
+Installer의 트랜잭션을 따른다. MSI 설치가 이미 완료된 뒤의 새 앱 시작 실패까지 자동으로
+이전 MSI 버전을 재설치하는 기능은 없다. 실패 결과는 다음 시작에서 알리고 로그를 남긴다.
+
+DMG에서 직접 실행하거나 App Translocation·패키지 관리자·개발 경로인 경우 자동 교체를
+제공하지 않고 설치 링크를 안내한다. Mac은 쓰기 가능한 Applications 폴더로 복사한다.
+이전 다운로드 전용 Grid를 설치했다면 updater 포함 버전을 **한 번 수동 설치**해야 한다.
+
+## 업데이트 서명과 배포 키
+
+`GridUpdate.json`은 저장소·태그·버전·플랫폼별 파일명·크기·SHA256을 담는다.
+`GridUpdate.sig`는 JSON 원문 전체의 Ed25519 서명이다. 앱과 helper 모두 소스에 고정한
+`crates/update/public-key.hex`로 서명과 패키지 해시를 확인한다. URL은 검증한 태그와
+파일명으로 포크 주소 아래에서만 만든다. 같은 버전·낮은 버전·누락 서명은 설치하지 않는다.
+원본 craft-update 설치기의 제작사 검증은 변경하지 않고 독립된 포크 인증 경로를 사용한다.
+
+**도입 상태:** 코드와 서명 workflow를 준비했으며, 최초 운영 키 생성·등록은 아직 대기 중이다.
+공개키가 비어 있으면 앱은 설치를 거부하고, signing secret이 없으면 release job도 실패한다.
+키를 준비한 이후 이 문단을 실제 상태로 갱신한다. 이전 draft의 파일은 자동으로 바뀌지 않는다.
+
+키 생성·등록은 저장소 소유자 확인 후에만 한다. 최초 한 번 다음 흐름을 사용한다.
+개인키 값은 명령 인자·출력·git에 넣지 않는다. 개인키를 잃으면 기존 설치본의 신뢰키를
+바꿀 수 없으므로 소유자가 별도 안전한 백업을 보관해야 한다. 단순 키 교체는 자동으로
+전파되지 않으며, 회전은 기존 키로 인증되는 전환 설계가 필요하다.
+
+```sh
+umask 077
+mkdir -p "$HOME/.config/grid-release"
+cargo run --locked -p gridcraft-update --bin grid-update-sign -- keygen \
+  "$HOME/.config/grid-release/update-private-key.hex" \
+  "$HOME/.config/grid-release/update-public-key.hex"
+cp "$HOME/.config/grid-release/update-public-key.hex" crates/update/public-key.hex
+gh secret set GRID_UPDATE_PRIVATE_KEY --repo JeongEEE/gridcraft \
+  < "$HOME/.config/grid-release/update-private-key.hex"
+```
+
+공개키는 앱 빌드 **이전**에 커밋하고 signing secret과 일치하는지 확인한다. 배포 workflow는
+모든 패키지를 만든 뒤 전용 도구로 manifest를 서명한다. 개발 테스트용 결정적 키를
+운영 키로 쓰지 않는다. 공개키를 환경변수로 덮어쓰는 런타임 우회는 제공하지 않는다.
+
+업데이트 서명은 Apple Developer ID·공증이나 Windows Authenticode와 별개다.
+현재 Mac은 ad-hoc·미공증, Windows는 Authenticode 미서명이므로 OS 실행 확인이 필요할 수 있다.
+OS 보안을 해제하거나 유료 계정·인증서를 자동 구매하지 않는다.
+
+검증에는 `cargo test -p gridcraft-update`, UI 저장 취소 테스트, 그리고 패키징 후 native
+bundle/MSI/portable 시험을 사용한다. Windows MSI 시험은 기존 버전·제품 ID가 다른
+테스트용 MSI를 별도로 만들어 실제 major upgrade와 단일 등록·문맥 유지까지 확인한다.
+실제 사용자 설치나 원본 앱을 실험 대상으로 사용하지 않는다.
 
 ## 저작권과 문서
 
