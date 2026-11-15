@@ -12,6 +12,7 @@ repository = "https://github.com/storytold/gridcraft"
 
 [workspace.dependencies]
 # internal
+gridcraft-update = { path = "crates/update" }
 gridcraft-core = { path = "crates/core" }
 gridcraft-numfmt = { path = "crates/numfmt" }
 gridcraft-sandbox = { path = "crates/sandbox" }

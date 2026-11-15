@@ -2322,6 +2322,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gridcraft-update"
+version = "0.19.2"
+dependencies = [
+ "craft-update",
+ "nix",
+ "ring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "winreg",
+ "zip 3.0.0",
+]
+
+[[package]]
 name = "gridcraft-web"
 version = "0.19.2"
 dependencies = [
