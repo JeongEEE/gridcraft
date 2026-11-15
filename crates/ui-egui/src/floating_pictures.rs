@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use egui::TextureHandle;
 use gridcraft_engine::model::Image;
@@ -23,12 +23,12 @@ const MIN_TEXTURE_SIDE: u32 = 64;
 const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CACHE_ITEMS: usize = 4096;
 
-/// A picture: its workbook, its object id there, and its size in bytes (object ids are per
-/// workbook, so two open workbooks can both have a picture 1).
+/// A picture's workbook and shared encoded-media allocation. Repeated picture objects share
+/// one texture; replacing even equal-length bytes gives a new allocation and a new texture.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct Key {
     doc: u64,
-    id: u32,
+    source: usize,
     len: usize,
 }
 
@@ -41,6 +41,10 @@ struct Cache {
 }
 
 struct Entry {
+    /// Reserves Key::source until eviction without retaining encoded bytes after deletion.
+    /// A Weak keeps the Arc allocation's address unavailable for reuse; Arc::make_mut also
+    /// moves to a new allocation while a Weak exists, so edited bytes get a fresh texture.
+    _source: Weak<Vec<u8>>,
     /// `None` when the picture can't be decoded: kept, so it isn't tried again every frame.
     texture: Option<TextureHandle>,
     bytes: usize,
@@ -67,7 +71,7 @@ impl Cache {
     }
 
     /// The texture for picture `key` drawn with its longer side `want` pixels long.
-    fn texture(&mut self, ctx: &egui::Context, key: Key, data: &[u8], want: u32) -> Option<TextureHandle> {
+    fn texture(&mut self, ctx: &egui::Context, key: Key, data: &Arc<Vec<u8>>, want: u32) -> Option<TextureHandle> {
         let frame = ctx.cumulative_frame_nr();
         let side = texture_side(want, ctx.input(|i| i.max_texture_side));
         if let Some(entry) = self.entries.get_mut(&key) {
@@ -91,7 +95,7 @@ impl Cache {
         }
         let (texture, side) = match decoded {
             Some((image, complete)) => {
-                (Some(ctx.load_texture(format!("img{}", key.id), image, egui::TextureOptions::LINEAR)), if complete { u32::MAX } else { side })
+                (Some(ctx.load_texture(format!("img{}", key.source), image, egui::TextureOptions::LINEAR)), if complete { u32::MAX } else { side })
             }
             None => (None, u32::MAX),
         };
@@ -103,7 +107,7 @@ impl Cache {
             return texture;
         }
         self.bytes = self.bytes.saturating_add(bytes);
-        self.entries.insert(key, Entry { texture: texture.clone(), bytes, side, used: frame });
+        self.entries.insert(key, Entry { _source: Arc::downgrade(data), texture: texture.clone(), bytes, side, used: frame });
         texture
     }
 }
@@ -159,7 +163,7 @@ pub(crate) fn forget_closed(ctx: &egui::Context, open: &[u64]) {
 pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::Rect) -> Option<TextureHandle> {
     let px = (rect.width().max(rect.height()) * ctx.pixels_per_point()).ceil();
     let want = if px.is_finite() && px > 0.0 { px.min(u32::MAX as f32) as u32 } else { 1 };
-    let key = Key { doc, id: image.id, len: image.data.len() };
+    let key = Key { doc, source: Arc::as_ptr(&image.data) as usize, len: image.data.len() };
     cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &image.data, want)
 }
 
@@ -167,15 +171,15 @@ pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::
 mod tests {
     use super::*;
 
-    fn png(w: u32, h: u32, color: [u8; 4]) -> Vec<u8> {
+    fn png(w: u32, h: u32, color: [u8; 4]) -> Arc<Vec<u8>> {
         let image = image::RgbaImage::from_pixel(w, h, image::Rgba(color));
         let mut bytes = Cursor::new(Vec::new());
         image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
-        bytes.into_inner()
+        bytes.into_inner().into()
     }
 
-    fn key(doc: u64, id: u32, data: &[u8]) -> Key {
-        Key { doc, id, len: data.len() }
+    fn key(doc: u64, data: &Arc<Vec<u8>>) -> Key {
+        Key { doc, source: Arc::as_ptr(data) as usize, len: data.len() }
     }
 
     /// Runs one frame, so the frame number moves on as it does when the app paints.
@@ -185,11 +189,49 @@ mod tests {
     }
 
     #[test]
+    fn repeated_picture_objects_share_a_texture_and_replaced_bytes_refresh_it() {
+        let ctx = egui::Context::default();
+        let mut data = png(11, 11, [0, 0, 0, 255]);
+        let mut different = png(11, 11, [255, 0, 0, 255]);
+        // Legal trailing bytes after IEND make both encodings the same length.
+        let len = data.len().max(different.len());
+        Arc::make_mut(&mut data).resize(len, 0);
+        Arc::make_mut(&mut different).resize(len, 0);
+        let mut picture = Image { id: 1, anchor: Default::default(), data, mime: "image/png".into(), alt: String::new() };
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(11.0, 11.0));
+        let first = texture(&ctx, 1, &picture, rect).unwrap();
+        for id in 2..=5_000 {
+            picture.id = id;
+            assert_eq!(texture(&ctx, 1, &picture, rect).unwrap().id(), first.id(), "objects sharing bytes use one GPU texture");
+        }
+        assert_ne!(texture(&ctx, 2, &picture, rect).unwrap().id(), first.id(), "workbook caches stay independent even for shared media");
+        assert_eq!(different.len(), picture.data.len());
+        picture.data = different;
+        assert_ne!(
+            texture(&ctx, 1, &picture, rect).unwrap().id(),
+            first.id(),
+            "replacing the same object's equal-length bytes cannot show the old picture"
+        );
+        forget_closed(&ctx, &[2]);
+        assert!(cache(&ctx).lock().unwrap().entries.keys().all(|key| key.doc == 2));
+    }
+
+    #[test]
+    fn embedded_gif_picture_is_decoded_instead_of_a_placeholder() {
+        // Synthetic 1×1 GIF, red/black palette, LZW codes clear / pixel 0 / end.
+        let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00;";
+        let (decoded, complete) = decode(gif, 64).expect("XLSX embedded GIF must display");
+        assert!(complete);
+        assert_eq!(decoded.size, [1, 1]);
+        assert_eq!(decoded.pixels, vec![egui::Color32::RED]);
+    }
+
+    #[test]
     fn pictures_are_decoded_at_about_the_size_drawn() {
         let ctx = egui::Context::default();
         let mut cache = Cache::default();
         let data = png(3000, 1000, [10, 120, 200, 255]);
-        let k = key(1, 1, &data);
+        let k = key(1, &data);
         let small = cache.texture(&ctx, k, &data, 300).unwrap();
         assert_eq!(small.size(), [384, 128], "drawn 300 px long: decoded for 384");
         assert_eq!(cache.texture(&ctx, k, &data, 380).unwrap().id(), small.id(), "still within its size: not decoded again");
@@ -204,8 +246,8 @@ mod tests {
         // Never past the GPU's limit (2048 in a default context) nor the source.
         assert_eq!(cache.texture(&ctx, k, &data, 50_000).unwrap().size(), [2048, 683]);
         let tiny = png(40, 20, [0, 0, 0, 255]);
-        assert_eq!(cache.texture(&ctx, key(1, 2, &tiny), &tiny, 4000).unwrap().size(), [40, 20]);
-        assert_eq!(cache.entries.get(&key(1, 2, &tiny)).map(|e| e.side), Some(u32::MAX), "the whole picture: never decoded again");
+        assert_eq!(cache.texture(&ctx, key(1, &tiny), &tiny, 4000).unwrap().size(), [40, 20]);
+        assert_eq!(cache.entries.get(&key(1, &tiny)).map(|e| e.side), Some(u32::MAX), "the whole picture: never decoded again");
     }
 
     #[test]
@@ -213,9 +255,9 @@ mod tests {
         let ctx = egui::Context::default();
         let mut cache = Cache::default();
         // 40 pictures of 2048 × 2048 drawn in turn, one frame each: 640 MB decoded in all.
-        let data: Vec<Vec<u8>> = (0..40u8).map(|i| png(2048, 2048, [i, 0, 0, 255])).collect();
-        for (i, d) in data.iter().enumerate() {
-            assert!(cache.texture(&ctx, key(1, i as u32, d), d, 2048).is_some());
+        let data: Vec<Arc<Vec<u8>>> = (0..40u8).map(|i| png(2048, 2048, [i, 0, 0, 255])).collect();
+        for d in &data {
+            assert!(cache.texture(&ctx, key(1, d), d, 2048).is_some());
             frame(&ctx);
         }
         assert!(cache.bytes <= MAX_CACHE_BYTES, "{} bytes kept", cache.bytes);
@@ -227,11 +269,11 @@ mod tests {
         // Two frames pass so the rehearsal's entries are old enough to be evictable.
         frame(&ctx);
         frame(&ctx);
-        let shown: Vec<_> = data.iter().enumerate().take(12).map(|(i, d)| cache.texture(&ctx, key(1, i as u32, d), d, 2048).unwrap().id()).collect();
+        let shown: Vec<_> = data.iter().take(12).map(|d| cache.texture(&ctx, key(1, d), d, 2048).unwrap().id()).collect();
         for _ in 0..3 {
             frame(&ctx);
             for (i, d) in data.iter().enumerate().take(12) {
-                let id = cache.texture(&ctx, key(1, i as u32, d), d, 2048).unwrap().id();
+                let id = cache.texture(&ctx, key(1, d), d, 2048).unwrap().id();
                 if i < 8 {
                     assert_eq!(id, shown[i], "a picture that fits keeps its texture");
                 }
@@ -246,11 +288,11 @@ mod tests {
         let ctx = egui::Context::default();
         let mut cache = Cache::default();
         let data = png(64, 64, [0, 200, 0, 255]);
-        let first = cache.texture(&ctx, key(1, 1, &data), &data, 64).unwrap();
+        let first = cache.texture(&ctx, key(1, &data), &data, 64).unwrap();
         // Another workbook's picture 1, of the same size: a texture of its own.
         let other = png(64, 64, [200, 0, 0, 255]);
         assert_eq!(other.len(), data.len());
-        assert_ne!(cache.texture(&ctx, key(2, 1, &other), &other, 64).unwrap().id(), first.id());
+        assert_ne!(cache.texture(&ctx, key(2, &other), &other, 64).unwrap().id(), first.id());
         cache.forget_closed(&[1, 2]);
         assert_eq!(cache.entries.len(), 2);
         cache.forget_closed(&[2]);
@@ -265,11 +307,11 @@ mod tests {
     fn broken_and_oversized_pictures_are_refused_once() {
         let ctx = egui::Context::default();
         let mut cache = Cache::default();
-        let garbage = vec![0xAB; 100];
-        assert!(cache.texture(&ctx, key(1, 1, &garbage), &garbage, 100).is_none());
-        assert_eq!(cache.entries.get(&key(1, 1, &garbage)).map(|e| (e.side, e.bytes)), Some((u32::MAX, 0)), "remembered, not retried");
+        let garbage = Arc::new(vec![0xAB; 100]);
+        assert!(cache.texture(&ctx, key(1, &garbage), &garbage, 100).is_none());
+        assert_eq!(cache.entries.get(&key(1, &garbage)).map(|e| (e.side, e.bytes)), Some((u32::MAX, 0)), "remembered, not retried");
         // A PNG whose header says 20,000 × 20,000 is refused from its header: nothing is decoded.
-        let mut huge = png(1, 1, [0, 0, 0, 255]);
+        let mut huge = png(1, 1, [0, 0, 0, 255]).as_ref().clone();
         let ihdr = huge.windows(4).position(|w| w == b"IHDR").unwrap();
         huge[ihdr + 4..ihdr + 8].copy_from_slice(&20_000u32.to_be_bytes());
         huge[ihdr + 8..ihdr + 12].copy_from_slice(&20_000u32.to_be_bytes());

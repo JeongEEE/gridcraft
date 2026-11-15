@@ -6,15 +6,18 @@
 //! text. Both carry the source in `descr="gridcraft:latex:…"`, which wins on reading; without it,
 //! Office Math in the subset `omml` reads is converted back to LaTeX.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS};
 use gridcraft_model::{Anchor, AnchorMode, Color, Image, Shape, ShapeFormat, ShapeKind, ShapeTextAlign, ShapeTextAnchor, Sheet, Theme};
 
 use crate::IoError;
+use crate::package::Rel;
 use crate::read::Ctx;
 use crate::tables::EMU_PER_PX;
-use crate::xml::{El, esc, esc_attr};
+use crate::xml::{self, El, esc, esc_attr};
 
 mod ink;
 
@@ -126,87 +129,146 @@ fn mime_for(name: &str) -> &'static str {
     }
 }
 
+/// Bound the model allocations after streaming removes the whole-part XML tree bound.
+/// A single anchor still has the usual XML node/depth limits; package byte limits also apply.
+const MAX_DRAWING_ANCHORS: usize = 100_000;
+
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
-    let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
+    let bytes = match cx.pkg.read(part) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            cx.warn(format!("missing part {part}"));
+            return Ok(());
+        }
+        Err(e @ IoError::TooLarge(_)) => return Err(e),
+        Err(e) => {
+            cx.warn(format!("skipped {part}: {e}"));
+            return Ok(());
+        }
+    };
     let rels = cx.pkg.rels(part)?;
-    for (n, a) in x.children.iter().enumerate() {
-        let Some(anchor) = read_anchor(a, sheet) else { continue };
-        let n = n + 1;
-        // Objects in markup-compatibility blocks: the first choice (chartex frames, or Office Math
-        // that converts to LaTeX), else the fallback.
-        let objs: Vec<&El> = a
-            .children
-            .iter()
-            .flat_map(|o| match o.name.as_str() {
-                "AlternateContent" => o
-                    .child("Choice")
-                    .filter(|c| {
-                        // Office Math is taken only when the box holds one equation that
-                        // converts: otherwise the fallback (a picture or text from the writer)
-                        // keeps everything visible.
-                        c.child("graphicFrame").is_some()
-                            || c.child("sp").and_then(|sp| sp.child("txBody")).and_then(crate::omml::equation_source).is_some()
-                    })
-                    .or_else(|| o.child("Fallback"))
-                    .map(|c| c.children.iter().collect())
-                    .unwrap_or_default(),
-                _ => vec![o],
-            })
-            .collect();
-        for obj in objs {
-            match obj.name.as_str() {
-                "pic" => {
-                    let Some(rid) = obj.path(&["blipFill", "blip"]).and_then(|b| b.attr("embed")) else { continue };
-                    let Some(rel) = rels.iter().find(|r| r.id == rid && !r.external) else {
-                        cx.warn("a linked (not embedded) picture was skipped");
-                        continue;
-                    };
-                    let target = rel.target.clone();
-                    let Some(data) = cx.pkg.read(&target)? else {
+    // Saved drawings can have a relationship per picture, even when all share one media part.
+    // Linear searches here made reopening such a drawing quadratic in its picture count.
+    let mut by_id = HashMap::new();
+    for rel in &rels {
+        by_id.entry(rel.id.as_str()).or_insert(rel);
+    }
+    let mut media = HashMap::new();
+    let (images, charts, shapes, next_id) = (sheet.images.len(), sheet.charts.len(), sheet.shapes.len(), cx.next_id);
+    let mut count = 0usize;
+    let result = xml::parse_streaming(&bytes, &["oneCellAnchor", "twoCellAnchor", "absoluteAnchor"], &mut |a| {
+        count += 1;
+        if count > MAX_DRAWING_ANCHORS {
+            return Err(IoError::Xml(format!("the drawing holds more than {MAX_DRAWING_ANCHORS} anchors")));
+        }
+        read_drawing_anchor(cx, part, sheet, &a, count, &by_id, &mut media)
+    });
+    if let Err(e) = result {
+        // Preserve optional_xml's all-or-nothing behaviour: a late XML error must not leave
+        // an incomplete drawing, or remove objects from earlier drawings on this sheet.
+        sheet.images.truncate(images);
+        sheet.charts.truncate(charts);
+        sheet.shapes.truncate(shapes);
+        cx.next_id = next_id;
+        if matches!(e, IoError::TooLarge(_)) {
+            return Err(e);
+        }
+        cx.warn(format!("skipped {part}: {e}"));
+    }
+    Ok(())
+}
+
+fn read_drawing_anchor(
+    cx: &mut Ctx<'_>,
+    part: &str,
+    sheet: &mut Sheet,
+    a: &El,
+    n: usize,
+    rels: &HashMap<&str, &Rel>,
+    media: &mut HashMap<String, Arc<Vec<u8>>>,
+) -> Result<(), IoError> {
+    let Some(anchor) = read_anchor(a, sheet) else { return Ok(()) };
+    // Objects in markup-compatibility blocks: the first choice (chartex frames, or Office Math
+    // that converts to LaTeX), else the fallback.
+    let objs: Vec<&El> = a
+        .children
+        .iter()
+        .flat_map(|o| match o.name.as_str() {
+            "AlternateContent" => o
+                .child("Choice")
+                .filter(|c| {
+                    // Office Math is taken only when the box holds one equation that
+                    // converts: otherwise the fallback (a picture or text from the writer)
+                    // keeps everything visible.
+                    c.child("graphicFrame").is_some()
+                        || c.child("sp").and_then(|sp| sp.child("txBody")).and_then(crate::omml::equation_source).is_some()
+                })
+                .or_else(|| o.child("Fallback"))
+                .map(|c| c.children.iter().collect())
+                .unwrap_or_default(),
+            _ => vec![o],
+        })
+        .collect();
+    for obj in objs {
+        match obj.name.as_str() {
+            "pic" => {
+                let Some(rid) = obj.path(&["blipFill", "blip"]).and_then(|b| b.attr("embed")) else { continue };
+                let Some(rel) = rels.get(rid).filter(|r| !r.external) else {
+                    cx.warn("a linked (not embedded) picture was skipped");
+                    continue;
+                };
+                let target = rel.target.clone();
+                let data = if let Some(data) = media.get(&target) {
+                    Arc::clone(data)
+                } else {
+                    let Some(bytes) = cx.pkg.read(&target)? else {
                         cx.warn(format!("missing picture {target}"));
                         continue;
                     };
-                    let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
-                    let id = cx.next_object_id();
-                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
-                }
-                "graphicFrame" => {
-                    let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
-                    let uri = gd.attr("uri").unwrap_or("");
-                    if let Some(rid) = gd.child("chart").and_then(|c| c.attr("id")) {
-                        let Some(rel) = rels.iter().find(|r| r.id == rid) else {
-                            cx.warn(format!("a chart without its chart part was skipped ({part}, object {n})"));
-                            continue;
-                        };
-                        let target = rel.target.clone();
-                        if let Some(cx_xml) = cx.optional_xml(&target)? {
-                            let chartex = uri.contains("chartex");
-                            match if chartex { crate::chartex::read_chartex(&cx_xml) } else { crate::chart::read_chart(&cx_xml) } {
-                                Some(mut ch) => {
-                                    ch.id = cx.next_object_id();
-                                    ch.anchor = anchor;
-                                    sheet.charts.push(ch);
-                                }
-                                None => cx.warn(format!("chart {target} has no supported plot and was skipped")),
-                            }
-                        } else {
-                            cx.warn(format!("chart {target} is missing from the package and was skipped ({part}, object {n})"));
-                        }
-                    } else if uri.contains("chartex") || uri.contains("chartEx") {
-                        cx.warn(format!("a histogram, waterfall, treemap… chart without its chart part was skipped ({part}, object {n})"));
-                    } else {
-                        cx.warn(format!("an embedded object (SmartArt, OLE…) was skipped ({part}, object {n})"));
-                    }
-                }
-                "sp" | "cxnSp" => {
-                    if let Some(s) = read_shape(obj, anchor) {
-                        let id = cx.next_object_id();
-                        sheet.shapes.push(Shape { id, ..s });
-                    }
-                }
-                "grpSp" => cx.warn(format!("grouped shapes are not supported and were skipped ({part}, object {n})")),
-                _ => {}
+                    let data = Arc::new(bytes);
+                    media.insert(target.clone(), Arc::clone(&data));
+                    data
+                };
+                let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
+                let id = cx.next_object_id();
+                sheet.images.push(Image { id, anchor, data, mime: mime_for(&target).to_string(), alt });
             }
+            "graphicFrame" => {
+                let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
+                let uri = gd.attr("uri").unwrap_or("");
+                if let Some(rid) = gd.child("chart").and_then(|c| c.attr("id")) {
+                    let Some(rel) = rels.get(rid) else {
+                        cx.warn(format!("a chart without its chart part was skipped ({part}, object {n})"));
+                        continue;
+                    };
+                    let target = rel.target.clone();
+                    if let Some(cx_xml) = cx.optional_xml(&target)? {
+                        let chartex = uri.contains("chartex");
+                        match if chartex { crate::chartex::read_chartex(&cx_xml) } else { crate::chart::read_chart(&cx_xml) } {
+                            Some(mut ch) => {
+                                ch.id = cx.next_object_id();
+                                ch.anchor = anchor;
+                                sheet.charts.push(ch);
+                            }
+                            None => cx.warn(format!("chart {target} has no supported plot and was skipped")),
+                        }
+                    } else {
+                        cx.warn(format!("chart {target} is missing from the package and was skipped ({part}, object {n})"));
+                    }
+                } else if uri.contains("chartex") || uri.contains("chartEx") {
+                    cx.warn(format!("a histogram, waterfall, treemap… chart without its chart part was skipped ({part}, object {n})"));
+                } else {
+                    cx.warn(format!("an embedded object (SmartArt, OLE…) was skipped ({part}, object {n})"));
+                }
+            }
+            "sp" | "cxnSp" => {
+                if let Some(s) = read_shape(obj, anchor) {
+                    let id = cx.next_object_id();
+                    sheet.shapes.push(Shape { id, ..s });
+                }
+            }
+            "grpSp" => cx.warn(format!("grouped shapes are not supported and were skipped ({part}, object {n})")),
+            _ => {}
         }
     }
     Ok(())

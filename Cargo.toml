@@ -56,7 +56,7 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 sha2 = { version = "0.11", default-features = false }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
 # equations: RaTeX (MIT) lays LaTeX out as positioned glyphs, rules and paths. Exact pins: it is
 # young (0.1.x), and the gate recorded in docs/decisions.md vetted this release.
