@@ -148,15 +148,33 @@ mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/Grid.app"
 ln -s /Applications "$STAGE/Applications"
 # Use Finder defaults: the upstream custom layout names GridCraft.app.
-rm -f "$DMG" "$WORK/raw.dmg"
-# makehybrid + convert builds the image without attaching a device, unlike `create -srcfolder`,
-# which is flaky on CI runners ("Resource busy") and hangs in sandboxed sessions.
-# The fork has its own volume and app name.
-hdiutil makehybrid -hfs -hfs-volume-name "Grid" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
-hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
-rm -f "$WORK/raw.dmg"
+# The hybrid HFS writer adds Finder positions to every file, invalidating strict bundle
+# verification after mounting. A normal HFS+ image preserves the signed app's metadata.
+# Bound and retry creation: hdiutil can transiently report "Resource busy" on CI runners.
+python3 - "$STAGE" "$DMG" <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+stage, image = sys.argv[1:]
+for attempt in range(3):
+    Path(image).unlink(missing_ok=True)
+    try:
+        subprocess.run([
+            "hdiutil", "create", "-ov", "-fs", "HFS+", "-volname", "Grid",
+            "-format", "UDZO", "-imagekey", "zlib-level=9", "-srcfolder", stage, image,
+        ], check=True, timeout=180)
+        break
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        if attempt == 2:
+            raise
+        print("Retrying Grid disk-image creation in 5 seconds", file=sys.stderr)
+        time.sleep(5)
+PY
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
+"$HERE/check-dmg.sh" "$DMG"
 if [[ "$NOTARIZE" = 1 ]]; then
   notarize "$DMG"
   stapler_retry staple "$DMG"

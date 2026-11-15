@@ -58,6 +58,12 @@ macOS 패키징은 `packaging/macos/package.sh --arch universal`, Windows는 MSV
 WiX 5.0.2를 준비한 뒤 `pwsh packaging/windows/package.ps1 -Arch x64`로 실행한다.
 Apple Silicon만 빠르게 확인하려면 macOS의 `--arch aarch64`를 사용한다.
 
+macOS 패키징은 HFS+ DMG를 만든 후 이미지를 읽기 전용으로 마운트해 내부 `Grid.app`의
+엄격한 서명 검증까지 수행한다. 앱 스테이징 폴더와 DMG 자체의 서명 검사만으로 대체하지
+않는다. 기존 hybrid HFS 생성기는 파일마다 Finder 위치 정보를 추가해 이 검증을 깨뜨린다.
+이미지 생성은 일시적인 CI 장치 오류에 대비해 회당 180초, 최대 세 번으로 제한한다.
+완성된 파일은 `packaging/macos/check-dmg.sh <image.dmg>`로 다시 검사할 수 있다.
+
 셀 입력 변경 후에는 선택한 셀에서 편집기를 먼저 열지 않고 한글 `한글`을 입력해
 첫 음절과 다음 음절이 모두 남는지 확인한다. F2·수식 입력줄, 영문 첫 글자 중복,
 Esc 취소와 시트 보호도 함께 검사한다. `ime_cell_entry`는 조합·확정 이벤트뿐 아니라
