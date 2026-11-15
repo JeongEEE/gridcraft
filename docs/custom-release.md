@@ -39,6 +39,7 @@ rustup component add rustfmt clippy
 rustup target add wasm32-unknown-unknown x86_64-apple-darwin
 cargo build --release --locked -p gridcraft -p gridcraft-cli
 cargo test -p gridcraft-ui-egui --test fork_identity
+cargo test -p gridcraft-ui-egui --test ime_cell_entry
 python3 packaging/test_fork_contract.py
 cargo xtask ci
 ```
@@ -56,6 +57,16 @@ Rust가 PATH에 없다면 먼저 `. "$HOME/.cargo/env"`를 실행한다.
 macOS 패키징은 `packaging/macos/package.sh --arch universal`, Windows는 MSVC 도구와
 WiX 5.0.2를 준비한 뒤 `pwsh packaging/windows/package.ps1 -Arch x64`로 실행한다.
 Apple Silicon만 빠르게 확인하려면 macOS의 `--arch aarch64`를 사용한다.
+
+셀 입력 변경 후에는 선택한 셀에서 편집기를 먼저 열지 않고 한글 `한글`을 입력해
+첫 음절과 다음 음절이 모두 남는지 확인한다. F2·수식 입력줄, 영문 첫 글자 중복,
+Esc 취소와 시트 보호도 함께 검사한다. `ime_cell_entry`는 조합·확정 이벤트뿐 아니라
+편집 시작 시 입력기에 조합 취소를 요청하지 않는지도 검사한다.
+
+현재 macOS에서는 `crates/ui-egui/tests/arabic_editing.rs`의
+`caret_after_typing_arabic_is_drawn_at_its_left_end`가 원본 main에서도 실패한다.
+전체 CI가 통과했다고 보고하지 않으며, 동일 환경의 원본 기준선과 새 회귀를 구분한다.
+이 알려진 실패를 이유로 테스트를 약화하거나 다른 실패까지 제외하지 않는다.
 
 ## 원본과 분리한 설치·설정
 

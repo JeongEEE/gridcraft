@@ -7,7 +7,9 @@ impl SheetApp {
             && self.dialog.is_none()
             && self.message.is_none()
             && self.name_box.is_none()
-            && !ctx.text_edit_focused()
+            // The idle grid retains the cell editor's input owner so starting an IME doesn't
+            // cancel composition. A stored TextEditState alone is not an active text field.
+            && (!ctx.text_edit_focused() || ctx.memory(|m| m.has_focus(egui::Id::unique("gridcraft.cell_editor"))))
             && self.grid.context_menu.is_none()
             && self.grid.object_menu.is_none()
             && self.grid.header_menu.is_none()

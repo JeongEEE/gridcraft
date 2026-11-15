@@ -5,12 +5,15 @@ use super::{CellRef, Drag, Sheet, SheetApp, json};
 /// Grid keyboard handling when no text field has focus.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     // Focus left on an editor that no longer exists goes back to the grid.
-    let stale = [egui::Id::unique("gridcraft.cell_editor"), egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()];
+    // The idle grid and the in-cell editor share an input owner. Changing owners when the
+    // first preedit arrives asks egui to cancel the very native composition opening the edit.
+    let input_id = egui::Id::unique("gridcraft.cell_editor");
+    let stale = [egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()];
     let editing = app.editor.is_some() || app.text_box_editor.is_some();
     if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
-        resp.request_focus();
+        ctx.memory_mut(|m| m.request_focus(input_id));
     }
-    let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
+    let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || (f != input_id && !stale.contains(&f))));
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
     // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
     // arrow key would move the selection the menu fills from), and a macro's question.
@@ -25,13 +28,17 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     {
         return;
     }
-    if ctx.memory(|m| m.focused()).is_none() {
-        resp.request_focus();
+    if ctx.memory(|m| m.focused()).is_none_or(|f| f == resp.id) {
+        ctx.memory_mut(|m| m.request_focus(input_id));
     }
     // The grid owns arrows, Tab and Escape (egui would otherwise move focus between widgets).
     ctx.memory_mut(|m| {
-        m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
+        m.set_focus_lock_filter(input_id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true });
+        // A click can return focus just before this key, before the lock took effect. Cancel
+        // any UI-navigation request already queued for the key the sheet is handling now.
+        m.move_focus(egui::FocusDirection::None);
     });
+    enable_grid_ime(app, ctx, geo, sh, input_id);
     let events = grid_events(app, ctx, sh);
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
@@ -57,12 +64,19 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             // PRIMARY middle-click paste belongs to egui's TextEdit; the grid has no caret to
             // insert text at, so a middle click on a cell is deliberately not a paste.
             egui::Event::MiddleClickPaste { .. } => {}
-            egui::Event::Text(_) if shortcut_pressed || shortcut_ran => {}
+            egui::Event::Text(_) if shortcut_pressed || shortcut_ran => {
+                // A shortcut may itself open a focused editor (AutoSum). Its typed character
+                // must not be replayed into that new draft later in the same frame.
+                ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
+            }
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text))
+                if !text.is_empty() && text.chars().all(|c| !c.is_control()) =>
+            {
+                begin_ime_edit(app, ctx);
+                return;
+            }
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
-                app.begin_edit(Some(text), false);
-                if let Some(ed) = app.editor.as_mut() {
-                    ed.caret = ed.text.chars().count();
-                }
+                begin_text_edit(app, ctx, text);
                 return;
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
@@ -153,6 +167,53 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             }
             _ => {}
         }
+    }
+}
+
+/// A selected cell accepts text before its editor exists. Enabling the native IME only after
+/// the first Text event can cancel Korean's first syllable.
+fn enable_grid_ime(app: &SheetApp, ctx: &egui::Context, geo: &Geo, sh: &Sheet, input_id: egui::Id) {
+    let generation_id = input_id.with("ime_generation");
+    let pass = ctx.cumulative_pass_nr().max(1);
+    let gained_focus = ctx.memory(|m| m.has_focus(input_id) && !m.had_focus_last_frame(input_id));
+    let generation = ctx.data_mut(|d| {
+        if gained_focus || d.get_temp::<u64>(generation_id).is_none() {
+            d.insert_temp(generation_id, pass);
+        }
+        d.get_temp::<u64>(generation_id).unwrap_or(1)
+    });
+    if let Some(doc) = app.session.active() {
+        let rect = geo.mirror_rect(geo.cell_rect(sh, doc.selection.active));
+        ctx.output_mut(|o| {
+            o.ime = Some(egui::output::IMEOutput::new(input_id, generation, egui::IMEPurpose::Normal, rect, rect));
+        });
+    }
+}
+
+fn begin_ime_edit(app: &mut SheetApp, ctx: &egui::Context) {
+    app.begin_edit(Some(String::new()), false);
+    if let Some(ed) = app.editor.as_mut() {
+        // TextEdit owns the original IME input. Seeding text or resetting its cursor after
+        // processing it would destroy the preedit selection.
+        let id = egui::Id::unique("gridcraft.cell_editor");
+        egui::text_edit::TextEditState::default().store(ctx, id);
+        ctx.memory_mut(|m| m.request_focus(id));
+        ed.request_focus = false;
+        ed.sync_caret = false;
+    }
+}
+
+fn begin_text_edit(app: &mut SheetApp, ctx: &egui::Context, text: String) {
+    app.begin_edit(Some(text.clone()), false);
+    if let Some(ed) = app.editor.as_mut() {
+        ed.caret = ed.text.chars().count();
+        // Preserve ordinary entry's initial completion/caret semantics, but spend the seeded
+        // event: the shared input owner is already focused this frame.
+        ctx.input_mut(|i| {
+            if let Some(index) = i.events.iter().position(|e| matches!(e, egui::Event::Text(t) if t == &text)) {
+                i.events.remove(index);
+            }
+        });
     }
 }
 

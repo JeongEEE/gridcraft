@@ -378,6 +378,27 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     crate::text_box::show(app, ui, geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, geo, sh, wb);
+    } else if app.editor.is_none() && ui.memory(|m| m.has_focus(resp.id) || m.has_focus(egui::Id::unique("gridcraft.cell_editor"))) {
+        // Register the idle text-input owner only while the real editor is absent. This keeps
+        // focus alive between frames without a focus change (and IME cancellation) on typing.
+        let id = egui::Id::unique("gridcraft.cell_editor");
+        ui.memory_mut(|m| m.request_focus(id));
+        ui.interact(geo.cells, id, Sense::focusable_noninteractive());
+        // Pointer paths such as checkbox clicks return before keyboard(). Lock navigation on
+        // these frames too, so the next arrow stays in the sheet instead of moving UI focus.
+        ui.memory_mut(|m| m.set_focus_lock_filter(id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true }));
+    }
+    // Sharing the idle owner must not keep a cancelled/committed draft's native composition
+    // alive. Include edits closed by commands before this UI pass, not just editor shortcuts.
+    let editing = app.editor.as_ref().is_some_and(|e| !e.from_formula_bar);
+    let was_editing = ui.ctx().data_mut(|d| {
+        let id = egui::Id::unique("gridcraft.cell_editor.was_editing");
+        let previous = d.get_temp::<bool>(id).unwrap_or(false);
+        d.insert_temp(id, editing);
+        previous
+    });
+    if was_editing && !editing {
+        ui.memory_mut(|m| m.interrupt_ime());
     }
     filter_menu(app, ui, geo, previous_popups.0 == app.grid.filter_menu);
     list_picker(app, ui, geo, previous_popups.1 == app.grid.list_picker);

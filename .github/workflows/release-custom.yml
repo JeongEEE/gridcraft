@@ -205,6 +205,8 @@ jobs:
           These builds are not notarized/Authenticode-signed. Both platforms automatically check
           for new versions and offer a download link. Updates are installed manually; this fork
           does not replace or restart the app. The upstream publisher checks are not bypassed.
+
+          Korean cell entry preserves the first syllable when typing directly into a selected cell.
           NOTES
           printf '\nSource commit: `%s`\n' "$BUILD_SHA" >> /tmp/grid-release-notes.md
           if gh release view "gridcraft-v$VERSION" --json isDraft --jq '.isDraft' > /tmp/grid-release-state; then
