@@ -159,24 +159,26 @@ DMG에서 직접 실행하거나 App Translocation·패키지 관리자·개발 
 파일명으로 포크 주소 아래에서만 만든다. 같은 버전·낮은 버전·누락 서명은 설치하지 않는다.
 원본 craft-update 설치기의 제작사 검증은 변경하지 않고 독립된 포크 인증 경로를 사용한다.
 
-**도입 상태:** 코드와 서명 workflow를 준비했으며, 최초 운영 키 생성·등록은 아직 대기 중이다.
-공개키가 비어 있으면 앱은 설치를 거부하고, signing secret이 없으면 release job도 실패한다.
-키를 준비한 이후 이 문단을 실제 상태로 갱신한다. 이전 draft의 파일은 자동으로 바뀌지 않는다.
+**도입 상태:** 운영 Ed25519 키를 생성해 공개키를 소스에 고정하고 개인키를
+`GRID_UPDATE_PRIVATE_KEY` Actions secret에 등록했다. 서명된 패키지의 CI 검증과 초안
+갱신은 별도 단계다. 키 설정만으로 이전 draft의 설치 파일이 바뀌지는 않는다.
 
-키 생성·등록은 저장소 소유자 확인 후에만 한다. 최초 한 번 다음 흐름을 사용한다.
+개인키 정본은 저장소 밖 `~/Dev/keystores/grid/update-private-key.hex`에 보관한다.
+디렉터리 권한은 `700`, 개인키 권한은 `600`으로 제한한다. 저장소를 지우거나 다시 클론해도
+키를 유지하며 git에는 공개키만 커밋한다. 키 생성·등록은 소유자가 승인한 최초 한 번만 한다.
 개인키 값은 명령 인자·출력·git에 넣지 않는다. 개인키를 잃으면 기존 설치본의 신뢰키를
 바꿀 수 없으므로 소유자가 별도 안전한 백업을 보관해야 한다. 단순 키 교체는 자동으로
 전파되지 않으며, 회전은 기존 키로 인증되는 전환 설계가 필요하다.
 
 ```sh
 umask 077
-mkdir -p "$HOME/.config/grid-release"
+mkdir -m 700 "$HOME/Dev/keystores/grid"
 cargo run --locked -p gridcraft-update --bin grid-update-sign -- keygen \
-  "$HOME/.config/grid-release/update-private-key.hex" \
-  "$HOME/.config/grid-release/update-public-key.hex"
-cp "$HOME/.config/grid-release/update-public-key.hex" crates/update/public-key.hex
+  "$HOME/Dev/keystores/grid/update-private-key.hex" \
+  "$HOME/Dev/keystores/grid/update-public-key.hex"
+cp "$HOME/Dev/keystores/grid/update-public-key.hex" crates/update/public-key.hex
 gh secret set GRID_UPDATE_PRIVATE_KEY --repo JeongEEE/gridcraft \
-  < "$HOME/.config/grid-release/update-private-key.hex"
+  < "$HOME/Dev/keystores/grid/update-private-key.hex"
 ```
 
 공개키는 앱 빌드 **이전**에 커밋하고 signing secret과 일치하는지 확인한다. 배포 workflow는

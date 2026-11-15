@@ -47,4 +47,5 @@ Files: .github/workflows/release-custom.yml, packaging/windows/test-auto-update.
 - [x] 전체 품질 검사와 직접 diff 리뷰. 전체 테스트 3900 통과, 원본 Arabic caret 한 건 실패; 나머지 게이트 별도 실행.
 - [x] 기존 위키에 구조·서명키·업데이트 범위 반영하고 sync.
 - [ ] 범위 커밋·푸시, Windows/macOS CI 실행 결과 확인.
-- [ ] 검증된 결과 제시 후 개인키 생성/secret 등록 확인. 승인 후 키 고정·draft 재빌드·다운로드 검증. 공개 발행은 별도.
+- [x] 사용자 승인 후 `~/Dev/keystores/grid`에 운영 키 생성, Actions secret 등록 및 공개키 고정. 실제 운영 키 서명·검증 통과.
+- [ ] 서명된 draft 재빌드·다운로드 검증과 `/Applications/Grid.app` 설치. 공개 발행은 별도.

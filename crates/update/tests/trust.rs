@@ -64,3 +64,16 @@ fn even_signed_invalid_identity_and_paths_are_refused() {
         assert!(verify_manifest(&bytes, key.sign(&bytes).as_ref(), key.public_key().as_ref(), "0.19.2").is_err(), "case {change}");
     }
 }
+
+#[test]
+#[ignore = "Requires a signed release directory in GRID_UPDATE_VERIFY_RELEASE"]
+fn signed_release_matches_the_embedded_key_and_every_downloaded_package() {
+    let dir = std::env::var_os("GRID_UPDATE_VERIFY_RELEASE").map(std::path::PathBuf::from).expect("release directory");
+    let bytes = std::fs::read(dir.join("GridUpdate.json")).unwrap();
+    let sig = gridcraft_update::manifest::decode_hex(std::fs::read_to_string(dir.join("GridUpdate.sig")).unwrap().trim()).unwrap();
+    let manifest = verify_manifest(&bytes, &sig, &gridcraft_update::public_key().unwrap(), "0.0.0").unwrap();
+    assert_eq!(manifest.assets.len(), 3);
+    for asset in &manifest.assets {
+        verify_package(&dir.join(&asset.name), asset).unwrap();
+    }
+}
