@@ -217,6 +217,10 @@ impl SheetApp {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);
                 Ok(json!({"on": self.ui.autocomplete}))
             }
+            "options.autoFitNumbers" => {
+                self.ui.auto_fit_numbers = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.auto_fit_numbers);
+                Ok(json!({"on": self.ui.auto_fit_numbers}))
+            }
             "options.highlightActiveRow" => {
                 self.ui.highlight_active_row = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.highlight_active_row);
                 Ok(json!({"on": self.ui.highlight_active_row}))

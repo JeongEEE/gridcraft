@@ -20,12 +20,15 @@ fn harness() -> Harness {
     s.execute("cell.set", json!({"cell": "A5", "input": "123456789012"})).unwrap();
     s.execute("home.formatCells", json!({"range": "A5", "style": {"num_fmt": "#,##0"}})).unwrap();
     s.execute("selection.set", json!({"range": "H20"})).unwrap();
+    // Exercise workbook formatting independently of Grid's display-only numeric fit.
+    let mut app = crate::common::app(s);
+    app.ui.auto_fit_numbers = false;
     let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        crate::common::app(s),
+        app,
     );
     h.run_steps(4);
     h

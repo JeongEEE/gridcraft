@@ -1,7 +1,7 @@
 use super::active_row::paint_active_row;
 use super::cell_paint::{
-    Look, MergedArea, cell_text_y, center_across_end, col32, display_text, galley_baseline_bounds, look, merged_edges, paint_border, paint_cf_icon,
-    painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
+    Look, MergedArea, NumberFit, cell_text_y, center_across_end, col32, display_text, galley_baseline_bounds, look, merged_edges, paint_border,
+    paint_cf_icon, painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
 };
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
@@ -105,6 +105,7 @@ pub(crate) struct QuadrantPaint<'a> {
     pub(crate) tokens: &'a Tokens,
     /// The row to tint, when "Highlight the active cell's row" is on.
     pub(crate) active_row: Option<u32>,
+    pub(crate) auto_fit_numbers: bool,
 }
 
 /// Paint a worksheet quadrant, including backgrounds, borders, and text.
@@ -355,7 +356,9 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
     let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
     let avail_w = rect.right() - text_left;
-    let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
+    let rotated = st.align.rotation != 0 && st.align.rotation != 255;
+    let fit = NumberFit::new(avail_w, char_w, st, &v, q.auto_fit_numbers, sh.show_formulas);
+    let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, fit);
     if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
         text = crate::formula_locale::display(&text, crate::i18n::current(p.ctx()).formula_locale(), wb, si);
     }
@@ -376,7 +379,6 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     };
     let indent = st.align.indent as f32 * 9.0 * z;
     let pad = 2.5 * z;
-    let rotated = st.align.rotation != 0 && st.align.rotation != 255;
     // Rotated text wraps along its own direction (below), not across the column width.
     if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
         let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
@@ -405,11 +407,10 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     // The fill position indexes `text`; move it back by the breaks removed before it.
     let fill_char = fill_char.map(|(ch, pos)| (ch, pos.saturating_sub(text.get(..pos).map_or(0, |s| s.matches(['\n', '\r']).count()))));
     // Shrink to fit: too-wide content is drawn in a smaller font so it fits the cell (or the
-    // merged area): it neither spills, nor is clipped, nor turns into ####.
-    let small = (st.align.shrink && !rotated && st.align.h != HAlign::Fill && fill_char.is_none())
-        .then(|| shrink_font(p, &first_line, &font, avail_w - 2.0 * pad - indent))
-        .flatten();
-    let shrunk = small.is_some();
+    // merged area). Exceptionally narrow cells still need the overflow guard below.
+    // Accounting repeat-fill is expanded below, after the base number has fitted.
+    let room = avail_w - 2.0 * pad - indent;
+    let small = fit.shrink.then(|| shrink_font(p, &first_line, &font, room)).flatten();
     let font = small.unwrap_or(font);
     let layout = |text: String| {
         let mut job = egui::text::LayoutJob::simple(text, font.clone(), color, f32::INFINITY);
@@ -419,12 +420,13 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     };
     let mut galley = layout(first_line.clone());
     let mut w = galley.size().x;
-    // Numbers and dates never overflow: they show #### when too narrow.
-    let hashed = !shrunk && (numeric || matches!(v, Value::Number(_))) && w > avail_w - 2.0 * pad && st.align.h != HAlign::Fill;
+    // Never clip a partial amount as if it were the whole value. Even the smallest font may
+    // not fit an exceptionally narrow column; keep an overflow indicator in that case.
+    let hashed = (numeric || matches!(v, Value::Number(_))) && w > room && st.align.h != HAlign::Fill;
     if hashed {
         // Measured on `#` itself: it is wider than `0` in some fonts, and #### must fit its cell.
         let hash_w = p.layout_no_wrap("#".to_string(), font.clone(), color).size().x.max(1.0);
-        let n = ((avail_w - 2.0 * pad) / hash_w).floor().max(1.0) as usize;
+        let n = (room / hash_w).floor().max(1.0) as usize;
         galley = layout("#".repeat(n));
         w = galley.size().x;
     }
@@ -437,7 +439,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let base_w = w;
         let cw = p.layout_no_wrap(ch.to_string(), font.clone(), color).size().x.max(1.0);
         // A merged cell's width counts offscreen columns: no screen shows more repeats than this.
-        let n = ((((avail_w - 2.0 * pad) - base_w) / cw).floor().max(0.0) as usize).min(MAX_FILL_REPEATS);
+        let n = (((room - base_w) / cw).floor().max(0.0) as usize).min(MAX_FILL_REPEATS);
         let mut s = first_line.clone();
         if first_line.is_char_boundary(pos) {
             s.insert_str(pos, &ch.to_string().repeat(n));

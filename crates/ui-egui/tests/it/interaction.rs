@@ -1553,7 +1553,9 @@ fn general_numbers_fit_by_the_cells_own_font() {
     s.execute("home.fontSize", json!({"range": "A1:B1", "size": 9})).unwrap();
     s.execute("home.columnWidth", json!({"cols": "A:B", "width": 28})).unwrap();
     s.execute("selection.set", json!({"cell": "C3"})).unwrap();
-    let h = harness(s);
+    let mut h = harness(s);
+    h.state_mut().run("options.autoFitNumbers", json!({"on": false})).unwrap();
+    h.run_steps(2);
     let texts: Vec<String> = h
         .output()
         .shapes

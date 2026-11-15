@@ -96,15 +96,31 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
     (Look { style, fill, text_color }, cfl)
 }
 
-/// Text for a value with General narrowing to the available width.
+/// Available numeric display width and whether layout will shrink instead of narrowing General.
+#[derive(Clone, Copy)]
+pub(super) struct NumberFit {
+    pub width_px: f32,
+    pub char_w: f32,
+    pub shrink: bool,
+}
+
+impl NumberFit {
+    pub fn new(width_px: f32, char_w: f32, st: &Style, value: &Value, enabled: bool, show_formulas: bool) -> Self {
+        let rotated = st.align.rotation != 0 && st.align.rotation != 255;
+        let fit_layout = !rotated && !st.align.wrap && !matches!(st.align.h, HAlign::Fill | HAlign::Justify);
+        let auto_fit = enabled && matches!(value, Value::Number(_)) && !show_formulas;
+        Self { width_px, char_w, shrink: (st.align.shrink || auto_fit) && fit_layout }
+    }
+}
+
+/// Text for a value with General narrowing only when layout will not shrink it.
 pub(super) fn display_text(
     wb: &Workbook,
     sh: &Sheet,
     c: CellRef,
     v: &Value,
     st: &Style,
-    width_px: f32,
-    char_w: f32,
+    fit: NumberFit,
 ) -> (String, Option<Color32>, bool, Option<(char, usize)>) {
     if sh.show_formulas
         && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
@@ -120,9 +136,10 @@ pub(super) fn display_text(
         return (String::new(), None, false, None);
     }
     if code == "General"
+        && !fit.shrink
         && let Value::Number(n) = v
     {
-        let max_chars = ((width_px - 4.0) / char_w).floor().max(1.0) as usize;
+        let max_chars = ((fit.width_px - 4.0) / fit.char_w).floor().max(1.0) as usize;
         return match gridcraft_engine::numfmt::format_general_fit(*n, max_chars.min(11)) {
             Some(t) => (t, None, true, None),
             None => ("#".repeat(max_chars.max(1)), None, true, None),

@@ -105,6 +105,8 @@ pub struct UiState {
     /// Tint the active cell's whole row (File ▸ Options ▸ General), on every sheet and workbook, so
     /// the eye keeps its place across a wide table. A preference: nothing goes into the file.
     pub highlight_active_row: bool,
+    /// Grid-only numeric shrinking; preserves workbook font sizes, column widths and XLSX styles.
+    pub auto_fit_numbers: bool,
     /// AutoSave (the title-bar switch): save saved-to-file .xlsx workbooks shortly after every
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
@@ -157,6 +159,7 @@ impl Default for UiState {
             animations: true,
             autocomplete: true,
             highlight_active_row: false,
+            auto_fit_numbers: true,
             autosave: false,
             recent: vec![],
             keytip_invoke: None,
