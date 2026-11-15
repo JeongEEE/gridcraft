@@ -94,6 +94,11 @@ Windows UpgradeCode와 이미 배포한 component GUID는 이후 릴리스에서
 
 ## 버전과 릴리스
 
+`0.19.3`은 대량 DrawingML 그림을 앵커 단위로 읽고 공유 이미지·텍스처를 재사용하는
+호환성 수정이다. 37,000개 그림이 있는 XLSX의 셀 편집·저장·재열기와 GIF 표시를 검증했다.
+이 릴리스는 소유자의 사용 범위 결정에 따라 위에 명시한 기존 아랍어 커서 테스트 한 건을
+배포 차단 조건에서 제외한다. 테스트 자체는 유지하며 다른 실패를 함께 제외하지 않는다.
+
 버전의 정본은 `Cargo.toml`의 `[workspace.package].version`이다. 첫 포크 버전은 `0.19.2`다.
 다음 버전은 `cargo run -p xtask --no-default-features -- version set 0.19.3`으로 변경하고
 `Cargo.toml`과 `Cargo.lock`을 함께 커밋한다. 업스트림 병합 시 버전 충돌은 포크 버전을
