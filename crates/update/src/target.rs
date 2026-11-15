@@ -77,3 +77,45 @@ impl Target {
         Err("Grid automatic updates support installed macOS and Windows copies.".into())
     }
 }
+
+#[cfg(any(windows, test))]
+pub(crate) fn is_own_msi_product(name: &str, publisher: &str, product: &str) -> bool {
+    name == super::APP.name && publisher == super::APP.developer && craft_update::msi_context::valid_product_code(product)
+}
+
+#[cfg(any(windows, test))]
+pub(crate) fn msi_folder_argument(folder: &Path) -> Result<String, String> {
+    let path = folder.to_str().ok_or("Windows Installer cannot represent this folder name.")?;
+    if path.chars().any(|c| c == '"' || c.is_control()) {
+        return Err("Invalid character in the MSI installation folder.".into());
+    }
+    // MSI parses property assignments itself: raw_arg must quote the value, not the whole
+    // PROPERTY=value token. Canonical Win32 paths also need their ordinary DOS/UNC form.
+    let value =
+        if let Some(unc) = path.strip_prefix(r"\\?\UNC\") { format!(r"\\{unc}") } else { path.strip_prefix(r"\\?\").unwrap_or(path).to_string() };
+    Ok(format!("INSTALLFOLDER=\"{value}\""))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn msi_directory_assignment_quotes_only_the_value_and_rejects_injected_properties() {
+        use std::path::Path;
+        assert_eq!(
+            super::msi_folder_argument(Path::new(r"\\?\C:\Users\Name With Space\Grid")).unwrap(),
+            r#"INSTALLFOLDER="C:\Users\Name With Space\Grid""#
+        );
+        assert_eq!(super::msi_folder_argument(Path::new(r"\\?\UNC\server\share\그리드")).unwrap(), r#"INSTALLFOLDER="\\server\share\그리드""#);
+        assert!(super::msi_folder_argument(Path::new("C:\\bad\" TRANSFORMS=evil")).is_err());
+        assert!(super::msi_folder_argument(Path::new("C:\\bad\nfolder")).is_err());
+    }
+
+    #[test]
+    fn fork_msi_record_matches_its_publisher_and_valid_product_identity() {
+        let code = "{D0FEAEC3-C655-56AA-936E-56F8A764065E}";
+        assert!(super::is_own_msi_product("Grid", "JeongEEE", code));
+        assert!(!super::is_own_msi_product("Grid", "Learning Machines LLC", code));
+        assert!(!super::is_own_msi_product("GridCraft", "JeongEEE", code));
+        assert!(!super::is_own_msi_product("Grid", "JeongEEE", "not-a-product-code"));
+    }
+}

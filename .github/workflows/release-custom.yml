@@ -120,6 +120,7 @@ jobs:
       - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
         with:
           key: grid-windows-x64
+          cache-on-failure: true
       - name: Install WiX
         shell: pwsh
         run: |
