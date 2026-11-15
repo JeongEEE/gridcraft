@@ -102,7 +102,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
     }
 }
 
-pub(crate) fn install(package: &Path, target: &Target, version: &str, work: &Path) -> Result<(), String> {
+pub(crate) fn install(package: &Path, target: &Target, version: &str, work: &Path, reopen: &[String]) -> Result<(), String> {
     target.validate()?;
     let expected = craft_update::Version::parse(version).map_err(|e| e.to_string())?;
     let current = craft_update::detect::windows::executable_version(&target.exe()).ok_or("Cannot read installed Grid version.")?;
@@ -116,14 +116,16 @@ pub(crate) fn install(package: &Path, target: &Target, version: &str, work: &Pat
             if craft_update::detect::windows::executable_version(&staged.join("grid.exe")) != Some(expected) {
                 return Err("The portable update contains the wrong Grid version.".into());
             }
-            install::replace_portable(&staged, exe.parent().ok_or("No Grid folder.")?, || helper::restart(target, Some(&work.join("healthy"))))
+            install::replace_portable(&staged, exe.parent().ok_or("No Grid folder.")?, || {
+                helper::restart(target, Some(&work.join("healthy")), reopen)
+            })
         }
         Target::Msi { machine, exe, .. } => {
             install_msi(package, *machine, exe.parent().ok_or("No Grid folder.")?, work)?;
             if craft_update::detect::windows::executable_version(exe) != Some(expected) {
                 return Err("The MSI completed without installing the expected Grid version. See the update log.".into());
             }
-            helper::restart(target, Some(&work.join("healthy")))
+            helper::restart(target, Some(&work.join("healthy")), reopen)
         }
         _ => Err("A macOS update cannot install on Windows.".into()),
     }

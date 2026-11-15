@@ -49,6 +49,7 @@ pub(crate) struct Runtime {
     phase: Phase,
     ready: Option<Prepared>,
     pub(crate) restart_requested: bool,
+    reopen: Vec<(u64, Option<String>)>,
 }
 
 impl Drop for Runtime {
@@ -157,7 +158,7 @@ fn quit_is_pending(app: &SheetApp) -> bool {
 
 pub(crate) fn tick(app: &mut SheetApp, ctx: &egui::Context) {
     if app.updates_rt.restart_requested && !quit_is_pending(app) {
-        app.updates_rt.restart_requested = false;
+        cancel_restart(app);
     }
     let rt = &mut app.updates_rt;
     let manual = std::mem::take(&mut rt.manual);
@@ -199,24 +200,60 @@ pub(crate) fn tick(app: &mut SheetApp, ctx: &egui::Context) {
 
 pub(crate) fn cancel_restart(app: &mut SheetApp) {
     app.updates_rt.restart_requested = false;
+    app.updates_rt.reopen.clear();
+}
+
+fn reopen_path(doc: &gridcraft_engine::DocState) -> Option<String> {
+    // Imports and encrypted files have a source but deliberately no overwrite/save target.
+    // Reopen that source through the normal open flow, including any password prompt.
+    let path = doc.path.as_ref().map(std::path::PathBuf::from).or_else(|| doc.wb.source_path.clone())?;
+    let path = if path.is_absolute() { path } else { std::env::current_dir().ok()?.join(path) };
+    path.to_str().map(str::to_string)
+}
+
+/// The quit guard removes settled documents. Remember their final Save As path before that.
+pub(crate) fn remember_restart_document(app: &mut SheetApp) {
+    if !app.updates_rt.restart_requested {
+        return;
+    }
+    if let Some(doc) = app.session.active()
+        && let Some((_, path)) = app.updates_rt.reopen.iter_mut().find(|(uid, _)| *uid == doc.uid)
+    {
+        *path = reopen_path(doc);
+    }
 }
 
 fn request_restart(app: &mut SheetApp, ctx: &egui::Context) {
     if app.updates_rt.ready.is_none() {
         return;
     }
+    begin_restart(app, ctx);
+}
+
+fn begin_restart(app: &mut SheetApp, ctx: &egui::Context) {
+    let active = app.session.active().map(|d| d.uid);
+    let mut reopen: Vec<_> = app.session.documents().iter().map(|d| (d.uid, reopen_path(d))).collect();
+    // Normal file opening activates the last one. The save guard may change the active document.
+    reopen.sort_by_key(|(uid, _)| Some(*uid) == active);
     app.updates_rt.visible = false;
     app.request_quit(ctx);
     app.updates_rt.restart_requested = quit_is_pending(app);
+    if app.updates_rt.restart_requested {
+        app.updates_rt.reopen = reopen;
+    }
 }
 
 /// No ready update is installed on a normal quit or after cancelling a restart/save prompt.
 pub(crate) fn start_pending_update(app: &mut SheetApp) {
     if !std::mem::take(&mut app.updates_rt.restart_requested) || !app.allow_close {
+        app.updates_rt.reopen.clear();
         return;
     }
+    let mut seen = std::collections::BTreeSet::new();
+    let reopen =
+        std::mem::take(&mut app.updates_rt.reopen).into_iter().filter_map(|(_, path)| path).filter(|path| seen.insert(path.clone())).collect();
     if let Some(ready) = app.updates_rt.ready.take()
-        && let Err(reason) = ready.launch()
+        && let Err(reason) = ready.launch(reopen)
     {
         log::error!("Grid update helper: {reason}");
     }
@@ -281,6 +318,117 @@ pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
     use gridcraft_engine::Session;
+
+    struct Books(std::path::PathBuf);
+    impl Books {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let dir =
+                std::env::temp_dir().join(format!("grid-reopen-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+        fn path(&self, name: &str) -> String {
+            self.0.join(name).to_str().unwrap().to_string()
+        }
+    }
+    impl Drop for Books {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn saved_app(path: &str) -> SheetApp {
+        let mut app = SheetApp::new(Session::new(), Default::default());
+        app.session.new_workbook();
+        app.run("cell.set", serde_json::json!({"cell":"A1", "input":"보존할 내용"})).unwrap();
+        app.run("file.save", serde_json::json!({"path":path})).unwrap();
+        app
+    }
+    fn remembered(app: &SheetApp) -> Vec<&str> {
+        app.updates_rt.reopen.iter().filter_map(|(_, p)| p.as_deref()).collect()
+    }
+
+    #[test]
+    fn restart_remembers_all_files_and_opens_the_previously_active_one_last() {
+        let books = Books::new();
+        let first = books.path("한글 가계부.xlsx");
+        let second = books.path("두 번째.xlsx");
+        let mut app = saved_app(&first);
+        app.run("file.new", serde_json::json!({})).unwrap();
+        app.run("file.save", serde_json::json!({"path":second})).unwrap();
+        app.session.set_active(0);
+        begin_restart(&mut app, &egui::Context::default());
+        assert!(app.allow_close);
+        assert_eq!(remembered(&app), vec![second.as_str(), first.as_str()]);
+    }
+
+    #[test]
+    fn saving_during_update_quit_keeps_the_file_after_the_document_closes() {
+        let books = Books::new();
+        let path = books.path("가계부.xlsx");
+        let mut app = saved_app(&path);
+        app.run("cell.set", serde_json::json!({"cell":"A1", "input":"수정한 내용"})).unwrap();
+        let ctx = egui::Context::default();
+        begin_restart(&mut app, &ctx);
+        assert!(!app.allow_close);
+        assert!(app.answer_save_changes(crate::SaveAnswer::Save, true, &ctx));
+        assert!(app.allow_close);
+        assert_eq!(remembered(&app), vec![path.as_str()]);
+        assert!(app.session.documents().is_empty());
+        let mut reopened = SheetApp::new(Session::new(), Default::default());
+        reopened.open_path(&path);
+        assert_eq!(reopened.session.doc().unwrap().wb.sheets[0].cells.get(crate::cell(0, 0)).unwrap().input_text(), "수정한 내용");
+    }
+
+    #[test]
+    fn saving_a_new_workbook_uses_the_new_save_as_path() {
+        let books = Books::new();
+        let path = books.path("새 가계부.xlsx");
+        let mut app = SheetApp::new(
+            Session::new(),
+            crate::Services {
+                pick_save: Some(Box::new({
+                    let path = path.clone();
+                    move |_| Some(path.clone())
+                })),
+                ..Default::default()
+            },
+        );
+        app.session.new_workbook();
+        app.run("cell.set", serde_json::json!({"cell":"A1", "input":"42"})).unwrap();
+        let ctx = egui::Context::default();
+        begin_restart(&mut app, &ctx);
+        assert!(app.answer_save_changes(crate::SaveAnswer::Save, true, &ctx));
+        assert!(app.allow_close);
+        assert_eq!(remembered(&app), vec![path.as_str()]);
+        assert!(std::path::Path::new(&path).is_file());
+    }
+
+    #[test]
+    fn discard_reopens_only_existing_files_and_cancel_clears_the_pending_session() {
+        let books = Books::new();
+        let path = books.path("원본.xlsx");
+        let mut app = saved_app(&path);
+        app.run("cell.set", serde_json::json!({"cell":"A1", "input":"버릴 변경"})).unwrap();
+        app.run("file.new", serde_json::json!({})).unwrap();
+        app.run("cell.set", serde_json::json!({"cell":"A1", "input":"저장 안 할 새 문서"})).unwrap();
+        let ctx = egui::Context::default();
+        begin_restart(&mut app, &ctx);
+        assert!(app.answer_save_changes(crate::SaveAnswer::DontSave, true, &ctx));
+        assert!(app.answer_save_changes(crate::SaveAnswer::DontSave, true, &ctx));
+        assert!(app.allow_close);
+        assert_eq!(remembered(&app), vec![path.as_str()]);
+
+        let mut app = saved_app(&path);
+        app.run("cell.set", serde_json::json!({"cell":"A1", "input":"작업 유지"})).unwrap();
+        begin_restart(&mut app, &ctx);
+        assert_eq!(remembered(&app), vec![path.as_str()]);
+        assert!(app.answer_save_changes(crate::SaveAnswer::Cancel, true, &ctx));
+        assert!(remembered(&app).is_empty());
+        assert!(!app.updates_rt.restart_requested);
+        assert!(!app.allow_close);
+        assert!(app.session.doc().unwrap().is_dirty());
+    }
 
     #[test]
     fn ready_notice_can_be_dismissed_without_quitting_or_changing_the_workbook() {

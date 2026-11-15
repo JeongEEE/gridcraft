@@ -62,6 +62,8 @@ impl SheetApp {
                 crate::updates_ui::cancel_restart(self);
             }
             SaveAnswer::DontSave => {
+                #[cfg(not(target_arch = "wasm32"))]
+                crate::updates_ui::remember_restart_document(self);
                 self.run_or_alert("file.close", json!({"force": true, "document": true}));
                 if quitting {
                     self.continue_quit(ctx);
@@ -74,6 +76,8 @@ impl SheetApp {
                 }
                 self.run_or_alert("file.save", json!({}));
                 if self.session.active().is_some_and(|x| !x.is_dirty()) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    crate::updates_ui::remember_restart_document(self);
                     self.run_or_alert("file.close", json!({"force": true, "document": true}));
                     if quitting {
                         self.continue_quit(ctx);

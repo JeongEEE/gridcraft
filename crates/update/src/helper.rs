@@ -11,12 +11,15 @@ use std::time::Duration;
 
 const FLAG: &str = "--grid-update-helper";
 const HEALTH_ENV: &str = "GRID_UPDATE_HEALTH_FILE";
+const MAX_PLAN: usize = 512 * 1024;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Plan {
     parent: u32,
     target: Target,
+    #[serde(default)]
+    reopen: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,17 +33,22 @@ fn helper_name() -> &'static str {
     if cfg!(windows) { "grid-update-helper.exe" } else { "grid-update-helper" }
 }
 
-pub(crate) fn launch(prepared: Prepared) -> Result<(), String> {
+pub(crate) fn launch(prepared: Prepared, reopen: Vec<String>) -> Result<(), String> {
     prepared.target.validate()?;
+    validate_reopen(&reopen)?;
     let dir = prepared.folder.path();
     // Authenticate again before creating an executable helper or recording an install plan.
     let verified = read_verified(dir)?;
     manifest::verify_package(&dir.join(&verified.asset(prepared.target.platform())?.name), verified.asset(prepared.target.platform())?)?;
     let helper = dir.join(helper_name());
     std::fs::copy(std::env::current_exe().map_err(|e| e.to_string())?, &helper).map_err(|e| e.to_string())?;
-    let plan = Plan { parent: std::process::id(), target: prepared.target };
+    let plan = Plan { parent: std::process::id(), target: prepared.target, reopen };
     let plan_path = dir.join("install.json");
-    std::fs::write(&plan_path, serde_json::to_vec(&plan).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec(&plan).map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_PLAN {
+        return Err("Grid's update restart record is too large.".into());
+    }
+    std::fs::write(&plan_path, bytes).map_err(|e| e.to_string())?;
     craft_update::process::command(&helper)
         .arg(FLAG)
         .arg(&plan_path)
@@ -64,7 +72,8 @@ pub fn finish(args: &[std::ffi::OsString]) -> Option<Result<(), String>> {
             return Err("Invalid Grid update helper arguments.".into());
         }
         let plan_path = PathBuf::from(args.get(1).ok_or("Missing Grid update plan.")?);
-        let plan: Plan = serde_json::from_slice(&read_small(&plan_path, 16 * 1024)?).map_err(|e| e.to_string())?;
+        let plan: Plan = serde_json::from_slice(&read_small(&plan_path, MAX_PLAN)?).map_err(|e| e.to_string())?;
+        validate_reopen(&plan.reopen)?;
         let dir = validate_helper(&plan_path, &plan)?;
         let version = read_verified(&dir).map(|m| m.version).unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into());
         let result = apply(&dir, &plan);
@@ -72,7 +81,7 @@ pub fn finish(args: &[std::ffi::OsString]) -> Option<Result<(), String>> {
         record(&plan.target, &outcome);
         // Never launch another copy when the parent did not exit or another Grid is still open.
         if result.is_err() && !craft_update::process::running(plan.target.running_path()).unwrap_or(true) {
-            let _ = restart(&plan.target, None);
+            let _ = restart(&plan.target, None, &plan.reopen);
         }
         result
     })())
@@ -110,9 +119,9 @@ fn apply(dir: &Path, plan: &Plan) -> Result<(), String> {
     plan.target.validate()?;
     match &plan.target {
         #[cfg(target_os = "macos")]
-        Target::Mac { bundle } => super::macos::install(&package, bundle, &manifest.version, dir),
+        Target::Mac { bundle } => super::macos::install(&package, bundle, &manifest.version, dir, &plan.reopen),
         #[cfg(windows)]
-        Target::Msi { .. } | Target::Portable { .. } => super::windows::install(&package, &plan.target, &manifest.version, dir),
+        Target::Msi { .. } | Target::Portable { .. } => super::windows::install(&package, &plan.target, &manifest.version, dir, &plan.reopen),
         #[allow(unreachable_patterns)]
         _ => Err("This platform cannot install this Grid update.".into()),
     }
@@ -165,8 +174,17 @@ pub fn acknowledge_startup() {
     }
 }
 
-pub(crate) fn restart(target: &Target, health: Option<&Path>) -> Result<(), String> {
+fn validate_reopen(reopen: &[String]) -> Result<(), String> {
+    // Absolute paths cannot become CLI switches, and do not depend on the helper's cwd.
+    if reopen.iter().any(|p| !Path::new(p).is_absolute() || p.contains('\0')) {
+        return Err("An update restart file must have an absolute path.".into());
+    }
+    Ok(())
+}
+
+fn restart_command(target: &Target, health: Option<&Path>, reopen: &[String]) -> std::process::Command {
     let mut cmd = craft_update::process::command(target.exe());
+    cmd.args(reopen);
     cmd.env_remove("CRAFT_UPDATE_DEV")
         .env_remove("GRIDCRAFT_CONTROL_TOKEN")
         .env_remove("GRIDCRAFT_CONTROL_PORT")
@@ -177,12 +195,13 @@ pub(crate) fn restart(target: &Target, health: Option<&Path>) -> Result<(), Stri
     } else {
         cmd.env_remove(HEALTH_ENV);
     }
-    let mut child = cmd
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Could not restart Grid: {e}"))?;
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd
+}
+
+pub(crate) fn restart(target: &Target, health: Option<&Path>, reopen: &[String]) -> Result<(), String> {
+    validate_reopen(reopen)?;
+    let mut child = restart_command(target, health, reopen).spawn().map_err(|e| format!("Could not restart Grid: {e}"))?;
     let Some(health) = health else { return Ok(()) };
     let start = crate::instant();
     while start.elapsed() < Duration::from_secs(60) {
@@ -219,6 +238,56 @@ pub fn take_outcome() -> Option<Outcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_plan_keeps_the_open_workbooks_as_literal_arguments() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = root.path().join("Grid.app");
+        let file = root.path().join("한글 가계부 --sample.xlsx");
+        let plan: Plan = serde_json::from_value(serde_json::json!({
+            "parent": 123,
+            "target": Target::Mac { bundle },
+            "reopen": [file],
+        }))
+        .expect("an update plan must carry its open files");
+        let encoded = serde_json::to_value(&plan).unwrap();
+        assert_eq!(encoded["reopen"], serde_json::json!([file]));
+        let cmd = restart_command(&plan.target, None, &plan.reopen);
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), vec![file.as_os_str()]);
+        assert!(validate_reopen(&plan.reopen).is_ok());
+        for bad in ["--sample", "relative.xlsx", ""] {
+            assert!(validate_reopen(&[bad.into()]).is_err());
+        }
+    }
+
+    #[test]
+    fn old_update_plans_still_restart_without_files() {
+        let root = tempfile::tempdir().unwrap();
+        let plan: Plan = serde_json::from_value(serde_json::json!({
+            "parent": 123,
+            "target": Target::Mac { bundle: root.path().join("Grid.app") },
+        }))
+        .unwrap();
+        assert!(restart_command(&plan.target, None, &plan.reopen).get_args().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restarted_process_receives_each_unicode_file_without_shell_splitting() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let target = Target::Mac { bundle: root.path().join("Grid.app") };
+        let exe = target.exe();
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\nif [ -n \"$GRID_UPDATE_HEALTH_FILE\" ]; then printf ready > \"$GRID_UPDATE_HEALTH_FILE\"; fi\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let first = root.path().join("한글 가계부.xlsx").to_str().unwrap().to_string();
+        let second = root.path().join("금액 $(literal) 'quotes'.xlsx").to_str().unwrap().to_string();
+        let health = root.path().join("healthy");
+        restart(&target, Some(&health), &[first.clone(), second.clone()]).unwrap();
+        let received = std::fs::read_to_string(exe.with_file_name("Grid.args")).unwrap();
+        assert_eq!(received, format!("{first}\n{second}\n"));
+    }
     #[test]
     fn never_waits_for_itself_or_pid_zero() {
         assert!(!wait_for_parent(std::process::id(), Duration::ZERO));

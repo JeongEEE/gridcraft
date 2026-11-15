@@ -9,9 +9,9 @@ fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<String, String> {
     craft_update::process::run_command(cmd, program, Duration::from_secs(120))
 }
 
-pub(crate) fn install(package: &Path, bundle: &Path, version: &str, work: &Path) -> Result<(), String> {
+pub(crate) fn install(package: &Path, bundle: &Path, version: &str, work: &Path, reopen: &[String]) -> Result<(), String> {
     let target = Target::Mac { bundle: bundle.to_path_buf() };
-    install_restarting(package, bundle, version, work, || helper::restart(&target, Some(&work.join("healthy"))))
+    install_restarting(package, bundle, version, work, || helper::restart(&target, Some(&work.join("healthy")), reopen))
 }
 
 fn install_restarting(package: &Path, bundle: &Path, version: &str, work: &Path, restart: impl FnOnce() -> Result<(), String>) -> Result<(), String> {

@@ -47,10 +47,10 @@ impl Prepared {
     }
 
     /// Called only at actual app exit after the user requested restart and settled all drafts.
-    pub fn launch(self) -> Result<(), String> {
+    pub fn launch(self, reopen: Vec<String>) -> Result<(), String> {
         let target = self.target.clone();
         let version = self.version.clone();
-        let result = super::helper::launch(self);
+        let result = super::helper::launch(self, reopen);
         if let Err(reason) = &result {
             super::helper::record(&target, &super::helper::Outcome { success: false, version, message: reason.clone() });
         }
