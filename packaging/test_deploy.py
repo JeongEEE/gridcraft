@@ -32,6 +32,12 @@ if args[0] == 'api':
 run = dict(databaseId=123, headSha=sha, headBranch='my-custom-release', status='completed',
            conclusion='success', url='https://github.com/JeongEEE/gridcraft/actions/runs/123')
 if args[:2] == ['run', 'list']:
+    polls = sum(json.loads(line)[:2] == ['run', 'list'] for line in pathlib.Path(os.environ['TEST_CALLS']).read_text().splitlines())
+    if state.get('manual_run_missing') or (not pathlib.Path(os.environ['TEST_DISPATCHED']).exists()
+            and (state.get('push_run_missing') or polls <= state.get('push_run_delayed_polls', 0))):
+        if state.get('release_ref_changed'):
+            subprocess.run(['git', 'push', 'origin', 'HEAD^:refs/heads/my-custom-release', '--force'], check=True, capture_output=True)
+        print('[]'); sys.exit(0)
     if pathlib.Path(os.environ['TEST_DISPATCHED']).exists():
         run['databaseId'] = 124
     elif state.get('failed_run'):
@@ -117,8 +123,15 @@ class DeployTest(unittest.TestCase):
     def settings(self, **values):
         self.state.write_text(json.dumps(values))
 
-    def deploy(self, *args, answer='n\n'):
-        return subprocess.run([sys.executable, str(self.repo / 'packaging/deploy.py'), *args], cwd=self.repo,
+    def deploy(self, *args, answer='n\n', fast_clock=False):
+        command = [sys.executable, str(self.repo / 'packaging/deploy.py'), *args]
+        if fast_clock:
+            # Advance only the subprocess's wall-clock boundary; retain real git and script behavior.
+            command = [sys.executable, '-c', 'import itertools, runpy, sys, time; '
+                       'ticks=itertools.count(0, 5); time.monotonic=lambda: next(ticks); '
+                       'time.sleep=lambda seconds: None; '
+                       'sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0], run_name="__main__")', *command[1:]]
+        return subprocess.run(command, cwd=self.repo,
                               env=self.env, input=answer, text=True, capture_output=True, timeout=30)
 
     def assert_ok(self, result):
@@ -205,6 +218,42 @@ class DeployTest(unittest.TestCase):
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertTrue(any(call[:2] == ['workflow', 'run'] for call in calls))
         self.assertTrue(any(call[:3] == ['run', 'watch', '124'] for call in calls))
+
+    def test_missing_push_run_requests_same_source_once_and_finishes_draft(self):
+        self.settings(push_run_missing=True)
+        self.assert_ok(self.deploy('0.19.6', '--draft', fast_clock=True))
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        dispatches = [call for call in calls if call[:2] == ['workflow', 'run']]
+        self.assertEqual(dispatches, [['workflow', 'run', 'release-custom.yml', '--ref', 'my-custom-release', '--repo', 'JeongEEE/gridcraft']])
+        self.assertTrue(any(call[:3] == ['run', 'watch', '124'] for call in calls))
+        self.assertEqual(self.git('rev-list', '--count', 'HEAD'), '2')
+        self.assertFalse(self.published.exists())
+
+    def test_delayed_push_run_is_followed_without_manual_dispatch(self):
+        self.settings(push_run_delayed_polls=2)
+        self.assert_ok(self.deploy('0.19.6', '--draft', fast_clock=True))
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        self.assertFalse(any(call[:2] == ['workflow', 'run'] for call in calls))
+        self.assertTrue(any(call[:3] == ['run', 'watch', '123'] for call in calls))
+
+    def test_missing_manual_run_stops_with_source_and_actions_link(self):
+        self.settings(push_run_missing=True, manual_run_missing=True)
+        result = self.deploy('0.19.6', answer='y\n', fast_clock=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('대상 소스: ' + self.git('rev-parse', 'HEAD'), result.stderr)
+        self.assertIn('https://github.com/JeongEEE/gridcraft/actions/workflows/release-custom.yml', result.stderr)
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        self.assertEqual(sum(call[:2] == ['workflow', 'run'] for call in calls), 1)
+        self.assertFalse(self.published.exists())
+
+    def test_changed_release_ref_cannot_dispatch_another_source(self):
+        self.settings(push_run_missing=True, release_ref_changed=True)
+        result = self.deploy('0.19.6', '--draft', fast_clock=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('배포 브랜치', result.stderr)
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        self.assertFalse(any(call[:2] == ['workflow', 'run'] for call in calls))
+        self.assertFalse(self.published.exists())
 
     def test_remote_release_ahead_of_source_stops_before_version_mutation(self):
         self.git('switch', '-c', 'release-ahead')

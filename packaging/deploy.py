@@ -156,22 +156,46 @@ class Deployment:
         return sorted((row for row in rows if row['headSha'] == self.sha and row['headBranch'] == RELEASE_BRANCH),
                       key=lambda row: row['databaseId'], reverse=True)
 
+    def request_build(self):
+        # workflow_dispatch resolves a branch. Reject a ref that already moved; later
+        # run/draft SHA checks still reject a race after this lookup.
+        ref = self.git('ls-remote', 'origin', f'refs/heads/{RELEASE_BRANCH}').split()
+        if not ref or ref[0] != self.sha:
+            raise DeployError('배포 브랜치가 확정한 소스와 달라졌습니다. 원격 변경을 확인한 뒤 다시 실행하세요.')
+        print(f'Actions 실행을 요청합니다 · 소스 {self.sha[:8]}', flush=True)
+        self.gh('workflow', 'run', WORKFLOW, '--ref', RELEASE_BRANCH, capture=False)
+
     def follow_build(self, pushed):
         self.step(4, 'GitHub Actions · macOS / Windows 빌드 및 설치 검증')
         ignored = set()
+        dispatched = False
         if not pushed:
             existing = self.runs()
             if not existing or (existing[0]['status'] == 'completed' and existing[0]['conclusion'] != 'success'):
                 ignored = {row['databaseId'] for row in existing}
-                self.gh('workflow', 'run', WORKFLOW, '--ref', RELEASE_BRANCH, capture=False)
-        deadline = time.monotonic() + 120
+                self.request_build()
+                dispatched = True
+        started = time.monotonic()
+        dispatch_at = started + 30
+        deadline = started + 120
         while True:
             candidates = [row for row in self.runs() if row['databaseId'] not in ignored]
             if candidates:
                 selected = candidates[0]
                 break
-            if time.monotonic() >= deadline:
-                raise DeployError('정확한 소스 커밋의 Actions 실행을 찾지 못했습니다. GitHub Actions를 확인하고 같은 버전으로 다시 실행하세요.')
+            now = time.monotonic()
+            if not dispatched and now >= dispatch_at:
+                # A successful push does not guarantee a visible Actions run. Give its trigger
+                # time to appear, then request the same source once instead of only timing out.
+                print('푸시로 시작된 Actions 실행이 없어 수동 실행으로 이어갑니다.', flush=True)
+                self.request_build()
+                dispatched = True
+                deadline = time.monotonic() + 120
+            elif now >= deadline:
+                raise DeployError('정확한 소스 커밋의 Actions 실행을 찾지 못했습니다. '
+                                  '실행 요청 후에도 생성되지 않았습니다. Actions 권한과 실행 상태를 확인하세요.\n'
+                                  f'대상 소스: {self.sha}\n'
+                                  f'https://github.com/{REPO}/actions/workflows/{WORKFLOW}')
             time.sleep(3)
         run_id = str(selected['databaseId'])
         self.run_url = selected['url']
