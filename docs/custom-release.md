@@ -105,6 +105,8 @@ Actions 실행·runner·배포 브랜치 푸시는 사용하지 않는다. 기�
 `gh auth login`이 필요하다. 의존성 설치는 자동으로 시스템 설정을 변경하지 않도록 별도로 한다.
 
 Mac: Xcode와 두 Rust target을 준비한다. Xcode가 있으면 스크립트가 `DEVELOPER_DIR`를 설정한다.
+Cargo가 PATH에 없어도 `CARGO_HOME/bin`(미설정 시 `~/.cargo/bin`)에서 찾고 그 경로를
+하위 Bash/PowerShell에도 전달한다. 전역 PATH나 셸 설정 파일은 변경하지 않는다.
 
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin

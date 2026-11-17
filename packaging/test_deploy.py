@@ -158,6 +158,26 @@ class LocalDeployTest(unittest.TestCase):
     def calls(self):
         return [json.loads(line) for line in (self.gh/'calls').read_text().splitlines()]
 
+    def test_fallback_cargo_directory_is_available_to_child_shells(self):
+        home = self.base/'home'
+        for custom in [False, True]:
+            with self.subTest(custom_cargo_home=custom):
+                cargo_home = self.base/'Custom Rust Home' if custom else home/'.cargo'
+                tools = cargo_home/'bin'
+                tools.mkdir(parents=True)
+                for name in ['cargo', 'rustc']:
+                    tool = tools/name
+                    tool.write_text('#!'+sys.executable+'\nprint("'+name+' from selected toolchain")\n')
+                    tool.chmod(0o755)
+                with patch.dict(os.environ, PATH='/usr/bin:/bin', CARGO_HOME=str(cargo_home) if custom else ''), \
+                        patch.object(Path, 'home', return_value=home), patch.object(deploy, 'ROOT', self.repo):
+                    deployment = deploy.Deployment(argparse.Namespace())
+                    result = deployment.command('/bin/bash', '-c', 'cargo --version && rustc --version', optional=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('cargo from selected toolchain', result.stdout)
+                    self.assertIn('rustc from selected toolchain', result.stdout)
+                    self.assertEqual(os.environ['PATH'], '/usr/bin:/bin')
+
     def test_two_os_upload_same_version_then_finalize_without_actions(self):
         self.ok('macos',draft=True)
         self.assertEqual(len(self.release()['assets']),3)

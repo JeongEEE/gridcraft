@@ -66,7 +66,14 @@ class Deployment:
         xcode = '/Applications/Xcode.app/Contents/Developer'
         if platform.system() == 'Darwin' and 'DEVELOPER_DIR' not in self.env and Path(xcode).is_dir():
             self.env['DEVELOPER_DIR'] = xcode
-        self.cargo = shutil.which('cargo') or str(Path.home()/'.cargo/bin'/('cargo.exe' if os.name == 'nt' else 'cargo'))
+        cargo_home = Path(self.env.get('CARGO_HOME') or Path.home()/'.cargo').expanduser().absolute()
+        if self.env.get('CARGO_HOME'):
+            self.env['CARGO_HOME'] = str(cargo_home)
+        located = shutil.which('cargo', path=self.env.get('PATH', os.defpath))
+        self.cargo = str(Path(located).absolute()) if located else str(cargo_home/'bin'/('cargo.exe' if os.name == 'nt' else 'cargo'))
+        # Packaging shells invoke cargo/rustc by name, including rustup proxy binaries.
+        # Preserve the proxy path instead of resolving the cargo symlink to rustup.
+        self.env['PATH'] = str(Path(self.cargo).parent)+os.pathsep+self.env.get('PATH', os.defpath)
         self.version, self.sha, self.common = '', '', None
         self.tag = ''
 
