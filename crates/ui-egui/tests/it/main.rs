@@ -118,6 +118,7 @@ mod tab_split;
 mod table_headings;
 mod text_box_editing;
 mod text_overflow_scroll;
+mod title_bar_drag;
 mod touch_pan;
 mod trace_navigation;
 mod translated_form_fields;

@@ -38,7 +38,21 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
         let rect = ui.max_rect();
         // Dragging the empty title area moves the window.
         let bg = ui.interact(rect, ui.scope_id().with("drag_title"), Sense::click_and_drag());
-        if bg.drag_started() {
+        if MAC {
+            // `StartDrag` does nothing here: winit's `performWindowDragWithEvent` gets the event
+            // AppKit is handling when eframe applies the command after the frame, not the press,
+            // and the winit fork keeps AppKit from moving the window by its title-bar band. So the
+            // window follows the pointer: keep the pressed point under it. Only on frames with a
+            // new pointer position: after a move the last position is relative to where the window
+            // was, so reusing it would push the window on every repaint until release.
+            // ponytail: no native snapping or Spaces drag; a winit drag that keeps the mouse-down event would give both.
+            if (bg.dragged() || bg.drag_stopped()) && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
+                let (outer, press, now) = ui.input(|i| (i.viewport().outer_rect, i.pointer.press_origin(), i.pointer.latest_pos()));
+                if let (Some(outer), Some(press), Some(now)) = (outer, press, now) {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::OuterPosition(outer.min + (now - press)));
+                }
+            }
+        } else if bg.drag_started() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
         if bg.double_clicked() {
