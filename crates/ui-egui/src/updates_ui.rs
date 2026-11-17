@@ -9,6 +9,8 @@ use std::sync::{
 use std::time::Duration;
 use std::time::Instant;
 
+mod view;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
@@ -21,6 +23,7 @@ enum Phase {
     Downloading {
         done: u64,
         total: u64,
+        reconnecting: bool,
     },
     Ready(String),
     Manual {
@@ -48,6 +51,7 @@ pub(crate) struct Runtime {
     stop: Arc<Stop>,
     phase: Phase,
     ready: Option<Prepared>,
+    completed: Option<(String, Option<f64>)>,
     pub(crate) restart_requested: bool,
     reopen: Vec<(u64, Option<String>)>,
 }
@@ -76,6 +80,7 @@ fn check_and_download(stop: &Stop, send: &dyn Fn(Message)) -> Result<Option<Prep
             return Ok(None);
         }
     };
+    send(Message::Progress(Transfer::Bytes { done: 0, total: 0 }));
     download(&release, target, stop, send).map(Some)
 }
 
@@ -125,8 +130,11 @@ fn begin(rt: &mut Runtime, ctx: &egui::Context, manual: bool) {
 
 fn receive(rt: &mut Runtime, message: Message) {
     match message {
-        Message::Progress(Transfer::Bytes { done, total } | Transfer::Reconnecting { done, total }) => {
-            rt.phase = Phase::Downloading { done, total };
+        Message::Progress(Transfer::Bytes { done, total }) => {
+            rt.phase = Phase::Downloading { done, total, reconnecting: false };
+        }
+        Message::Progress(Transfer::Reconnecting { done, total }) => {
+            rt.phase = Phase::Downloading { done, total, reconnecting: true };
         }
         Message::Manual(version, reason) => {
             rt.phase = Phase::Manual { version, reason };
@@ -156,6 +164,15 @@ fn quit_is_pending(app: &SheetApp) -> bool {
     app.allow_close || app.window_with_dialog("saveChanges").is_some() || app.macros.editor.as_ref().is_some_and(|ed| ed.quit)
 }
 
+fn outcome_notice(rt: &mut Runtime, outcome: gridcraft_update::helper::Outcome) -> Option<(String, String)> {
+    if outcome.success {
+        rt.completed = Some((format!("Grid {} 업데이트가 완료되었습니다.", outcome.version), None));
+        None
+    } else {
+        Some(("Grid 업데이트".into(), format!("업데이트를 설치하지 못했습니다. {}", outcome.message)))
+    }
+}
+
 pub(crate) fn tick(app: &mut SheetApp, ctx: &egui::Context) {
     if app.updates_rt.restart_requested && !quit_is_pending(app) {
         cancel_restart(app);
@@ -166,15 +183,10 @@ pub(crate) fn tick(app: &mut SheetApp, ctx: &egui::Context) {
     let periodic = rt.next_check.is_some_and(|at| gridcraft_update::instant() >= at) && rt.ready.is_none() && rt.pending.is_none();
     if manual || (startup && !rt.started) || periodic {
         if !rt.started {
-            if let Some(outcome) = gridcraft_update::helper::take_outcome() {
-                app.message = Some((
-                    "Grid 업데이트".into(),
-                    if outcome.success {
-                        format!("Grid {} 업데이트가 완료되었습니다.", outcome.version)
-                    } else {
-                        format!("업데이트를 설치하지 못했습니다. {}", outcome.message)
-                    },
-                ));
+            if let Some(outcome) = gridcraft_update::helper::take_outcome()
+                && let Some(notice) = outcome_notice(rt, outcome)
+            {
+                app.message = Some(notice);
             }
             rt.started = true;
         }
@@ -260,57 +272,40 @@ pub(crate) fn start_pending_update(app: &mut SheetApp) {
 }
 
 pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
-    let rt = &mut app.updates_rt;
-    if !rt.visible {
-        return;
+    // Finish in-place drafts before introducing a modal: outside clicks and Escape settle
+    // text-box drafts before the sheet UI runs, so a prompt must not cover an active draft.
+    let prompt_allowed = app.message.is_none()
+        && app.dialog.is_none()
+        && app.macros.question.is_none()
+        && app.editor.is_none()
+        && app.text_box_editor.is_none()
+        && !quit_is_pending(app);
+    let response = view::show(&mut app.updates_rt, ctx, prompt_allowed);
+    if response.modal {
+        // Sheet and ribbon shortcuts read raw events rather than egui focus. Consume keyboard
+        // events after the modal has handled them so they cannot edit the workbook underneath.
+        ctx.input_mut(|i| {
+            i.events.retain(|e| {
+                !matches!(
+                    e,
+                    egui::Event::Key { .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Ime(_)
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Paste(_)
+                        | egui::Event::PasteImage(_)
+                        | egui::Event::MiddleClickPaste { .. }
+                )
+            });
+        });
     }
-    let mut open = true;
-    let mut restart = false;
-    let mut releases = false;
-    egui::Window::new("Grid 업데이트").id(egui::Id::unique("grid.fork.update")).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
-        ui.set_max_width(440.0);
-        match &rt.phase {
-            Phase::Idle => {
-                ui.label("업데이트를 확인할 수 있습니다.");
-            }
-            Phase::Checking => {
-                ui.spinner();
-                ui.label("새 버전을 확인하고 있습니다…");
-            }
-            Phase::Current => {
-                ui.label(format!("Grid {VERSION} — 최신 버전입니다."));
-            }
-            Phase::Downloading { done, total } => {
-                ui.label("업데이트를 백그라운드에서 다운로드하고 있습니다.");
-                let fraction = if *total > 0 { *done as f32 / *total as f32 } else { 0.0 };
-                ui.add(egui::ProgressBar::new(fraction).show_percentage());
-            }
-            Phase::Ready(version) => {
-                ui.label(format!("Grid {version} 업데이트 준비 완료"));
-                ui.label("재시작하면 업데이트를 설치합니다. 저장하지 않은 문서는 먼저 확인합니다.");
-                restart = ui.button("재시작하여 업데이트").clicked();
-            }
-            Phase::Manual { version, reason } => {
-                ui.label(format!("Grid {version} 새 버전이 있습니다."));
-                ui.label(reason);
-                releases = ui.button("릴리스에서 설치 파일 받기").clicked();
-            }
-            Phase::Failed(reason) => {
-                ui.label("업데이트를 준비하지 못했습니다.");
-                ui.label(reason);
-                rt.manual |= ui.button("다시 시도").clicked();
-                releases = ui.button("릴리스에서 직접 받기").clicked();
-            }
-        }
-        if ui.button(if matches!(rt.phase, Phase::Ready(_)) { "나중에" } else { "닫기" }).clicked() {
-            rt.visible = false;
-        }
-    });
-    rt.visible &= open;
-    if releases && let Some(open) = &app.services.open_url {
+    if response.releases
+        && let Some(open) = &app.services.open_url
+    {
         open(&crate::UPDATE_APP.releases_url());
     }
-    if restart {
+    if response.restart {
         request_restart(app, ctx);
     }
 }
@@ -452,11 +447,203 @@ mod tests {
             h.render().unwrap().save(path).unwrap();
         }
         h.get_by_label("나중에").click();
-        h.run_steps(2);
+        h.run_steps(3);
         assert!(!h.state().updates_rt.visible);
         assert!(!h.state().updates_rt.restart_requested);
         assert!(!h.state().allow_close);
         assert!(h.state().session.documents().iter().any(|d| d.is_dirty()));
+        h.get_by_label("업데이트 준비됨").click();
+        h.run_steps(2);
+        assert!(h.query_by_label("재시작하여 업데이트").is_some());
+        assert!(!h.state().updates_rt.restart_requested);
+    }
+
+    #[test]
+    fn background_download_shows_progress_without_opening_a_dialog() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = SheetApp::new(Session::new(), Default::default());
+        receive(&mut app.updates_rt, Message::Progress(Transfer::Bytes { done: 25, total: 100 }));
+        let mut h = update_harness(app);
+        h.run_steps(3);
+        assert!(h.query_by_label("업데이트 다운로드 중").is_some());
+        assert!(h.query_by_label("25%").is_some());
+        assert!(!h.state().updates_rt.visible);
+        assert!(h.state().message.is_none());
+    }
+
+    #[test]
+    fn successful_install_shows_a_transient_notice_without_a_grid_or_modal() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = SheetApp::new(Session::new(), Default::default());
+        let notice = outcome_notice(
+            &mut app.updates_rt,
+            gridcraft_update::helper::Outcome { success: true, version: "0.20.0".into(), message: String::new() },
+        );
+        assert!(notice.is_none(), "successful updates must not open the message box");
+        let mut h = update_harness(app);
+        h.run_steps(3);
+        assert!(h.query_by_label("Grid 0.20.0 업데이트가 완료되었습니다.").is_some());
+        assert!(h.state().grid.rect.is_none());
+        h.input_mut().time = Some(h.ctx.input(|i| i.time) + 3.0);
+        h.step();
+        assert!(h.query_by_label("Grid 0.20.0 업데이트가 완료되었습니다.").is_some());
+        h.input_mut().time = Some(h.ctx.input(|i| i.time) + 1.1);
+        h.step();
+        assert!(h.query_by_label("Grid 0.20.0 업데이트가 완료되었습니다.").is_none());
+    }
+
+    #[test]
+    fn failed_install_keeps_an_actionable_error() {
+        let notice = outcome_notice(
+            &mut Runtime::default(),
+            gridcraft_update::helper::Outcome { success: false, version: "0.20.0".into(), message: "disk full".into() },
+        );
+        assert!(notice.is_some_and(|(_, text)| text.contains("disk full")));
+    }
+
+    #[test]
+    fn unknown_download_size_and_reconnect_do_not_claim_zero_or_complete() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = SheetApp::new(Session::new(), Default::default());
+        receive(&mut app.updates_rt, Message::Progress(Transfer::Bytes { done: 0, total: 0 }));
+        let mut h = update_harness(app);
+        h.run_steps(3);
+        assert!(h.query_by_label("업데이트 다운로드 준비 중").is_some());
+        assert!(h.query_by_label("0%").is_none());
+        receive(&mut h.state_mut().updates_rt, Message::Progress(Transfer::Reconnecting { done: 25, total: 100 }));
+        h.run_steps(2);
+        assert!(h.query_by_label("연결을 다시 시도하고 있습니다").is_some());
+        receive(&mut h.state_mut().updates_rt, Message::Progress(Transfer::Bytes { done: 99_999, total: 100_000 }));
+        h.run_steps(2);
+        assert!(h.query_by_label("99%").is_some());
+        assert!(h.query_by_label("100%").is_none());
+        receive(&mut h.state_mut().updates_rt, Message::Progress(Transfer::Bytes { done: 100, total: 100 }));
+        h.run_steps(2);
+        assert!(h.query_by_label("업데이트 검증 중").is_some());
+        assert!(h.query_by_label("100%").is_none());
+        assert!(!h.state().updates_rt.visible);
+    }
+
+    fn update_harness(app: SheetApp) -> egui_kittest::Harness<'static, SheetApp> {
+        egui_kittest::Harness::builder()
+            .with_size(egui::vec2(800.0, 480.0))
+            .with_step_dt(1.0 / 60.0)
+            .with_context_setup(|ctx| {
+                ctx.set_fonts(crate::theme::pinned_font_definitions());
+                crate::theme::apply(ctx, false);
+            })
+            .build_ui_state(|ui, app| show(app, ui.ctx()), app)
+    }
+
+    fn sheet_harness(mut app: SheetApp) -> egui_kittest::Harness<'static, SheetApp> {
+        app.use_prepared_fonts();
+        egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1024.0, 720.0))
+            .with_step_dt(1.0 / 60.0)
+            .with_context_setup(|ctx| {
+                ctx.set_fonts(crate::theme::pinned_font_definitions());
+                crate::theme::apply(ctx, false);
+            })
+            .build_ui_state(
+                |ui, app| {
+                    app.logic(ui.ctx());
+                    app.ui(ui);
+                },
+                app,
+            )
+    }
+
+    #[test]
+    fn restart_prompt_waits_until_cell_and_text_box_drafts_are_settled() {
+        use egui_kittest::kittest::Queryable;
+        for text_box in [false, true] {
+            let mut session = Session::new();
+            session.new_workbook();
+            let mut app = SheetApp::new(session, Default::default());
+            if text_box {
+                let id = app.run("insert.textBox", serde_json::json!({"at": "B2", "text": "original"})).unwrap()["shape"].as_u64().unwrap() as u32;
+                assert!(app.begin_text_box_edit(id));
+                app.text_box_editor.as_mut().unwrap().text = "draft".into();
+            } else {
+                app.begin_edit(Some("draft".into()), false);
+            }
+            app.updates_rt.phase = Phase::Ready("0.20.0".into());
+            app.updates_rt.visible = true;
+            let mut h = sheet_harness(app);
+            h.run_steps(3);
+            assert!(h.query_by_label("재시작하여 업데이트").is_none(), "an update must wait for the active draft");
+            assert!(h.query_by_label("업데이트 준비됨").is_some());
+            if text_box {
+                assert_eq!(h.state().text_box_editor.as_ref().unwrap().text, "draft");
+                h.state_mut().commit_text_box_edit().unwrap();
+            } else {
+                assert_eq!(h.state().editor.as_ref().unwrap().text, "draft");
+                assert!(h.state_mut().commit_edit(0, 0, false, false));
+            }
+            h.run_steps(3);
+            assert!(h.query_by_label("재시작하여 업데이트").is_some());
+        }
+    }
+
+    #[test]
+    fn restart_modal_blocks_sheet_keys_and_escape_only_defers() {
+        use egui_kittest::kittest::Queryable;
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("cell.set", serde_json::json!({"cell": "A1", "input": "keep me"})).unwrap();
+        app.updates_rt.phase = Phase::Ready("0.20.0".into());
+        app.updates_rt.visible = true;
+        let mut h = sheet_harness(app);
+        h.run_steps(4);
+        if let Ok(dir) = std::env::var("GRID_UPDATE_UI_SCREENSHOTS") {
+            h.render().unwrap().save(format!("{dir}/restart-in-app.png")).unwrap();
+        }
+        h.input_mut().events.extend([
+            egui::Event::Text("oops".into()),
+            egui::Event::Paste("oops".into()),
+            egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::RED))),
+        ]);
+        h.key_press(egui::Key::Delete);
+        h.run_steps(2);
+        assert!(h.state().editor.is_none());
+        assert_eq!(h.state_mut().run("cell.get", serde_json::json!({"cell": "A1"})).unwrap()["input"], "keep me");
+        assert!(h.state().session.active().unwrap().wb.active().unwrap().images.is_empty(), "image paste must not reach the sheet behind the modal");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(!h.state().updates_rt.visible);
+        assert!(h.query_by_label("업데이트 준비됨").is_some());
+        assert!(!h.state().allow_close);
+        assert!(!h.state().updates_rt.restart_requested);
+    }
+
+    #[test]
+    fn update_feedback_follows_light_and_dark_themes() {
+        use egui_kittest::kittest::Queryable;
+        for dark in [false, true] {
+            let mut app = SheetApp::new(Session::new(), Default::default());
+            app.updates_rt.phase = Phase::Ready("0.20.0".into());
+            app.updates_rt.visible = true;
+            let mut h = update_harness(app);
+            crate::theme::apply(&h.ctx, dark);
+            h.run_steps(3);
+            assert!(h.query_by_label("재시작하여 업데이트").is_some());
+            if let Ok(dir) = std::env::var("GRID_UPDATE_UI_SCREENSHOTS") {
+                let theme = if dark { "dark" } else { "light" };
+                h.render().unwrap().save(format!("{dir}/restart-{theme}.png")).unwrap();
+                h.state_mut().updates_rt.visible = false;
+                receive(&mut h.state_mut().updates_rt, Message::Progress(Transfer::Bytes { done: 29_600_000, total: 80_000_000 }));
+                h.run_steps(4);
+                h.render().unwrap().save(format!("{dir}/progress-{theme}.png")).unwrap();
+                h.state_mut().updates_rt.phase = Phase::Idle;
+                outcome_notice(
+                    &mut h.state_mut().updates_rt,
+                    gridcraft_update::helper::Outcome { success: true, version: "0.20.0".into(), message: String::new() },
+                );
+                h.run_steps(3);
+                h.render().unwrap().save(format!("{dir}/completed-{theme}.png")).unwrap();
+            }
+        }
     }
 
     #[test]
