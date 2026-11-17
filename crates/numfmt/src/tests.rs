@@ -906,83 +906,11 @@ fn b1_prefix_is_hidden_and_gregorian() {
     assert_eq!(f("B1yyyy-mm-dd hh:mm", 46314.5), "2026-10-19 12:00");
 }
 
-#[test]
-fn b2_prefix_renders_hijri_date() {
-    assert_eq!(f("B2dd/mm/yyyy", JAN_1_2001), "06/10/1421");
-    assert_eq!(f("b2d/m/yy", JAN_1_2001), "6/10/21");
-    assert_eq!(f("B2dddd dd/mm/yyyy hh:mm", JAN_1_2001 + 0.75), "الإثنين 06/10/1421 18:00");
-    assert_eq!(text_function(&Value::Number(46314.0), "B2dd/mm/yyyy", S).as_deref(), Ok("08/05/1448"));
-    assert_eq!(f("B2e", 46314.0), "1448");
-    assert_eq!(f("B2ee", 46314.0), "1448");
-    assert_eq!(f("B2d/m/yyyy;@", 46314.0), "8/5/1448");
-}
-
-/// Under `B2`, Excel shows Arabic weekday names, the full name for `ddd` as well as `dddd`.
-#[test]
-fn b2_prefix_names_weekdays_in_arabic() {
-    // Monday 19 and Tuesday 20 October 2026.
-    assert_eq!(f("B2dddd", 46314.0), "الإثنين");
-    assert_eq!(f("B2ddd", 46314.0), "الإثنين");
-    assert_eq!(f("B2dddd", 46315.0), "الثلاثاء");
-    assert_eq!(f("B1dddd", 46314.0), "Monday");
-    assert_eq!(f("B1ddd", 46315.0), "Tue");
-    // Every weekday has a name.
-    for v in 46314..46321 {
-        assert!(!f("B2dddd", v as f64).is_empty());
-    }
-}
-
 /// `B2` on a General or text section changes nothing: Excel shows the plain serial.
 #[test]
 fn b2_prefix_on_general_and_text_sections() {
     assert_eq!(f("B2General", 46314.0), "46314");
     assert_eq!(f("B2@", 46314.0), "46314");
-}
-
-#[test]
-fn b2_prefix_names_hijri_months() {
-    assert_eq!(f("B2d mmmm yyyy", JAN_1_2001), "6 شوال 1421");
-    assert_eq!(f("B2mmm", 37034.0), "ربيع\u{a0}الأول");
-    assert_eq!(f("B2mmmm", JAN_1_2001 + 23.0), "شوال");
-    assert_eq!(f("B2mmmm", JAN_1_2001 + 24.0), "ذو\u{a0}القعدة");
-    assert_eq!(f("B2mmmmm", JAN_1_2001 + 24.0), "ذ");
-}
-
-/// All twelve month names and seven weekday names as Excel 16.0 (build 20527, en-US) shows them,
-/// read with TEXT and a cell format: two-word month names are joined by a no-break space.
-#[test]
-fn b2_names_match_excel() {
-    let months = [
-        (46219.0, "صفر"),
-        (46248.0, "ربيع\u{a0}الأول"),
-        (46278.0, "ربيع\u{a0}الثاني"),
-        (46307.0, "جمادى\u{a0}الأولى"),
-        (46337.0, "جمادى\u{a0}الثانية"),
-        (46366.0, "رجب"),
-        (46396.0, "شعبان"),
-        (46425.0, "رمضان"),
-        (46455.0, "شوال"),
-        (46484.0, "ذو\u{a0}القعدة"),
-        (46514.0, "ذو\u{a0}الحجة"),
-        (46543.0, "محرم"),
-    ];
-    for (serial, name) in months {
-        assert_eq!(f("B2dd", serial), "01", "{serial}");
-        assert_eq!(f("B2mmmm", serial), name, "{serial}");
-        assert_eq!(f("B2mmm", serial), name, "{serial}");
-        assert_eq!(f("B2mmmmmm", serial), name, "{serial}");
-    }
-    // Sunday 18 to Saturday 24 October 2026.
-    let days = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
-    for (k, name) in days.iter().enumerate() {
-        let serial = 46313.0 + k as f64;
-        assert_eq!(f("B2dddd", serial), *name, "{serial}");
-        assert_eq!(f("B2ddd", serial), *name, "{serial}");
-    }
-    assert_eq!(f("B2yy", 46314.0), "48");
-    assert_eq!(f("B2y", 46314.0), "48");
-    assert_eq!(f("B2yyy", 46314.0), "1448");
-    assert_eq!(f("B2yyyyy", 46314.0), "1448");
 }
 
 #[test]

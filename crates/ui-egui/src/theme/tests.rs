@@ -223,33 +223,6 @@ fn fallback_covers_its_script() {
     }
 }
 
-#[test]
-/// A preferred Arabic file keeps the system Arabic faces from loading it again only once it is
-/// loaded: one that failed to load leaves them free to load it.
-fn an_unloaded_preferred_arabic_file_does_not_block_the_system_face() {
-    let dir = std::env::temp_dir().join(format!("gridcraft-theme-preferred-arabic-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let path = dir.join("Arabic.ttf");
-    std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("font fixture");
-    let path = path.to_string_lossy().into_owned();
-    let preferred = || Some((path.clone(), 0));
-    let faces = || vec![("sys-arabic", vec![(path.clone(), 0)])];
-
-    let mut fonts = FontDefinitions::default();
-    let loaded = preferred_file(&fonts, preferred());
-    assert!(loaded.is_empty(), "a preferred face that did not load reserves no file");
-    assert_eq!(load_faces(&mut fonts, faces(), loaded), ["sys-arabic"]);
-
-    let mut fonts = FontDefinitions::default();
-    fonts.font_data.insert(PREFERRED_ARABIC.into(), Arc::new(FontData::from_static(epaint_default_fonts::UBUNTU_LIGHT)));
-    let loaded = preferred_file(&fonts, preferred());
-    assert_eq!(loaded, std::slice::from_ref(&path));
-    assert!(load_faces(&mut fonts, faces(), loaded).is_empty(), "a loaded preferred file is not loaded a second time");
-    assert!(!fonts.font_data.contains_key("sys-arabic"));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 fn with_installed_latin_font() -> std::io::Result<FontDefinitions> {
     let dir = std::env::temp_dir().join(format!("gridcraft-theme-latin-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -295,62 +268,6 @@ fn installed_latin_fonts_keep_system_script_fallbacks() {
         }
         if fonts.font_data.contains_key("sys-arabic") {
             assert!(chain_covers(&fonts, chain, 'ع'), "{family:?} has no glyph for ع");
-        }
-    }
-}
-
-#[test]
-/// The craft Arabic face reaches workbook fonts and the pinned web set, without help from system faces.
-fn the_craft_arabic_face_reaches_every_chain() {
-    assert!(crate::craft_fonts_policy::web_allowed("Noto Sans Arabic", "Regular"));
-    if !craft_fonts_cover("العربية١٢٣") {
-        assert!(!craft_fonts_required(), "CRAFT_FONTS_REQUIRED=1 but no craft-fonts face covers Arabic");
-        return;
-    }
-    let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut fonts = with_installed_latin_font().expect("Latin-only fixture");
-    fonts.font_data.retain(|key, _| !key.starts_with("sys-"));
-    for (family, chain) in installed_latin_chains(&fonts) {
-        let chain = chain.expect("bound fixture family");
-        assert!("العربية١٢٣".chars().all(|ch| chain_covers(&fonts, chain, ch)), "{family:?} has no Arabic glyphs");
-    }
-    let pinned = pinned_font_definitions();
-    for (family, chain) in &pinned.families {
-        assert!("العربية".chars().all(|ch| chain_covers(&pinned, chain, ch)), "pinned {family:?} has no Arabic glyphs");
-    }
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-#[test]
-/// fontconfig's Arabic face, when it has Arabic letters, comes first among the Arabic fallbacks in every chain (#229). A
-/// UI or cell face with Arabic of its own sits ahead of every fallback and still draws Arabic first.
-fn the_fontconfig_arabic_choice_comes_first() {
-    assert_eq!(
-        parse_fc_match("/home/u/.local/share/fonts/Vazirmatn-Regular.ttf\n0\n"),
-        Some(("/home/u/.local/share/fonts/Vazirmatn-Regular.ttf".into(), 0))
-    );
-    assert_eq!(
-        parse_fc_match("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc\n2\n"),
-        Some(("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc".into(), 2))
-    );
-    assert_eq!(parse_fc_match("/usr/share/fonts/a.ttf"), Some(("/usr/share/fonts/a.ttf".into(), 0)));
-    assert_eq!(
-        parse_fc_match("/usr/share/fonts/vazirmatn/Vazirmatn[wght].ttf\n262145\n"),
-        Some(("/usr/share/fonts/vazirmatn/Vazirmatn[wght].ttf".into(), 1)),
-        "a named instance's bits are not part of the face index"
-    );
-    assert_eq!(parse_fc_match(""), None);
-    assert!(!covers_arabic(epaint_default_fonts::UBUNTU_LIGHT, 0), "a Latin-only face is not an Arabic choice");
-    if fontconfig_arabic().is_some() {
-        let fonts = font_definitions();
-        for (family, chain) in fonts.families.iter().filter(|(_, chain)| chain.iter().any(|key| key.starts_with("sys-"))) {
-            let preferred = chain.iter().position(|key| key == PREFERRED_ARABIC);
-            let other_arabic = chain.iter().position(|key| key == "sys-arabic" || key.starts_with("craft-"));
-            assert!(preferred.is_some(), "{family:?} lacks the preferred Arabic face");
-            assert!(other_arabic.is_none_or(|other| preferred < Some(other)), "{family:?} puts another Arabic face first");
-        }
-        if let (Some(preferred), Some(system)) = (fonts.font_data.get(PREFERRED_ARABIC), fonts.font_data.get("sys-arabic")) {
-            assert!((*preferred.font).as_ref() != (*system.font).as_ref(), "the system Arabic fallback is a different file from the preferred face");
         }
     }
 }

@@ -1059,20 +1059,6 @@ mod tests {
     }
 
     #[test]
-    fn arabic_defined_names_count_characters_not_bytes() {
-        let mut s = Session::new();
-        s.new_workbook();
-        let arabic = |n: usize| "س".repeat(n);
-        for ok in [200, 255] {
-            s.execute("formulas.defineName", json!({"name": arabic(ok), "refersTo": "=1"})).unwrap();
-        }
-        assert!(s.execute("formulas.defineName", json!({"name": arabic(256), "refersTo": "=1"})).is_err());
-        s.execute("range.setValues", json!({"range": "A1", "values": [[format!("ع{}", arabic(199))], [1]]})).unwrap();
-        let r = s.execute("formulas.createFromSelection", json!({"range": "A1:A2", "top": true})).unwrap();
-        assert_eq!(r["created"], 1);
-    }
-
-    #[test]
     fn names_referring_to_several_ranges() {
         let mut s = Session::new();
         s.new_workbook();

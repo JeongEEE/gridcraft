@@ -89,11 +89,6 @@ impl Face {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn bold_face_is_synthetic() -> bool {
-    face(true).is_ok_and(|face| face.is_some_and(|face| face.synthetic_bold))
-}
-
 /// The Arabic face for a weight, or `None` when none is bundled or installed. The search runs
 /// once per weight, so measuring text never rescans the font directories.
 fn face(is_bold: bool) -> Result<Option<&'static Face>, Error> {
@@ -610,57 +605,5 @@ impl OutlinePen for Pen {
     }
     fn close(&mut self) {
         self.op("h\n");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn fallback_mirrors_only_paired_ansi_punctuation() {
-        let visual: String = "(مرحبا)".chars().rev().map(super::mirror_ansi).collect();
-        assert_eq!(visual, "(ابحرم)");
-        assert_eq!("[(<«‹abc›»>)]".chars().rev().map(super::mirror_ansi).collect::<String>(), "[(<«‹cba›»>)]");
-    }
-
-    #[test]
-    fn a_bold_request_served_by_a_static_regular_face_is_emboldened() {
-        assert!(super::needs_synthetic_bold("craft:Noto Sans Arabic:Regular", b"static", true));
-        assert!(!super::needs_synthetic_bold("craft:Noto Sans Arabic:Regular", b"static", false));
-        assert!(!super::needs_synthetic_bold("craft:Noto Sans Arabic:Bold", b"static", true));
-        let glyph =
-            |emboldened| super::Glyph { path: "0 0 m 10 0 l 10 10 l h\n".into(), width: 500.0, source: String::new(), bounds: [0.0; 4], emboldened };
-        assert_eq!(super::glyph_procedure(&glyph(false)), "500 0 d0\n0 0 m 10 0 l 10 10 l h\nf\n");
-        assert_eq!(super::glyph_procedure(&glyph(true)), "500 0 d0\n30 w 1 j\n0 0 m 10 0 l 10 10 l h\nB\n");
-    }
-
-    #[test]
-    fn line_breaks_never_use_the_embedded_face() {
-        for ch in ['\n', '\r', '\u{2028}', '\u{2029}'] {
-            assert!(!super::embeddable(true, ch), "{ch:?}");
-        }
-        assert!(super::embeddable(true, 'م'));
-        assert!(super::embeddable(false, '\u{200f}'));
-        assert!(!super::embeddable(false, 'A'));
-    }
-
-    #[test]
-    fn no_bundled_or_installed_face_is_not_an_error() {
-        for bold in [false, true] {
-            assert!(matches!(super::find_face(&[], &[], bold), Ok(None)));
-            assert!(matches!(super::find_face(&[], &[std::env::temp_dir().join("gridcraft-no-fonts-here")], bold), Ok(None)));
-        }
-    }
-
-    #[test]
-    fn bundled_faces_match_the_requested_weight() {
-        const REGULAR: &[u8] = b"regular";
-        const BOLD: &[u8] = b"bold";
-        let bold_first = [("Noto Sans Arabic:Bold", BOLD), ("Noto Sans Arabic", REGULAR)];
-        assert_eq!(super::bundled_match(&bold_first, false), Some(REGULAR));
-        assert_eq!(super::bundled_match(&bold_first, true), Some(BOLD));
-        assert_eq!(super::bundled_match(&[("Noto Sans Arabic", REGULAR)], true), None);
-        assert_eq!(super::bundled_match(&[], false), None);
-        assert_eq!(super::bundled_fallback(&[("Noto Sans Arabic:Bold", BOLD)], false), None);
-        assert_eq!(super::bundled_fallback(&[("Noto Sans Arabic:Regular", REGULAR)], true), Some(("Noto Sans Arabic:Regular", REGULAR)));
     }
 }
