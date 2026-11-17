@@ -161,7 +161,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     anchor_keytip(app, ui, &sp, &["dialog:sparkline"]);
     egui::Popup::menu(&sp).show(|ui| {
         for (label, kind) in [("Line", "line"), ("Column", "column"), ("Win/Loss", "winLoss")] {
-            if ui.button(label).clicked() {
+            if ui.button(crate::widgets::tr(ui, label)).clicked() {
                 app.open_dialog("sparkline", json!({"type": kind}));
             }
         }

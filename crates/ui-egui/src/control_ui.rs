@@ -329,21 +329,21 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     let t = Tokens::get(ui.ctx());
     let mut mode = val(d, "mode");
     ui.horizontal(|ui| {
-        ui.radio_value(&mut mode, "macro".to_string(), "Run a macro");
-        ui.radio_value(&mut mode, "command".to_string(), "Run a command");
+        ui.radio_value(&mut mode, "macro".to_string(), crate::widgets::tr(ui, "Run a macro"));
+        ui.radio_value(&mut mode, "command".to_string(), crate::widgets::tr(ui, "Run a command"));
     });
     d.values.insert("mode".into(), json!(mode));
     ui.add_space(4.0);
     if mode == "macro" {
         let macros = macros(app);
         let mut name = val(d, "macro");
-        ui.label("Macro name:");
+        ui.label(crate::widgets::tr(ui, "Macro name:"));
         ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY).id_salt("assign_macro"));
         egui::Frame::NONE.fill(t.input_bg).stroke(Stroke::new(1.0, t.input_border)).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_size(vec2(ui.available_width(), 110.0));
             egui::ScrollArea::vertical().max_height(110.0).show(ui, |ui| {
                 if macros.is_empty() {
-                    ui.label(egui::RichText::new("This workbook has no macros yet.").italics().color(t.text_dim));
+                    ui.label(egui::RichText::new(crate::widgets::tr(ui, "This workbook has no macros yet.")).italics().color(t.text_dim));
                 }
                 for (n, desc) in &macros {
                     let r =
@@ -358,23 +358,23 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         d.values.insert("macro".into(), json!(name));
         ui.add_space(4.0);
         let mut input = val(d, "input");
-        ui.label("Run it on:");
-        ui.radio_value(&mut input, "selection".to_string(), "The selection when the button is pressed");
+        ui.label(crate::widgets::tr(ui, "Run it on:"));
+        ui.radio_value(&mut input, "selection".to_string(), crate::widgets::tr(ui, "The selection when the button is pressed"));
         ui.horizontal(|ui| {
-            ui.radio_value(&mut input, "fixed".to_string(), "Always this range:");
+            ui.radio_value(&mut input, "fixed".to_string(), crate::widgets::tr(ui, "Always this range:"));
             if input == "fixed" {
                 text_field(ui, d, "range", 160.0);
             }
         });
         d.values.insert("input".into(), json!(input));
         ui.horizontal(|ui| {
-            ui.label("Output to (optional):");
+            ui.label(crate::widgets::tr(ui, "Output to (optional):"));
             text_field(ui, d, "output", 120.0);
         });
     } else {
         let mut search = val(d, "search");
         let command = val(d, "command");
-        ui.label("Command:");
+        ui.label(crate::widgets::tr(ui, "Command:"));
         ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search commands").desired_width(f32::INFINITY).id_salt("assign_search"));
         egui::Frame::NONE.fill(t.input_bg).stroke(Stroke::new(1.0, t.input_border)).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_size(vec2(ui.available_width(), 130.0));
@@ -392,7 +392,7 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         if !doc.is_empty() {
             ui.label(egui::RichText::new(doc).small().color(t.text_dim));
         }
-        ui.label("Parameters (JSON):");
+        ui.label(crate::widgets::tr(ui, "Parameters (JSON):"));
         let mut params = val(d, "params");
         ui.add(egui::TextEdit::multiline(&mut params).code_editor().desired_rows(3).desired_width(f32::INFINITY).id_salt("assign_params"));
         d.values.insert("params".into(), json!(params));
@@ -512,7 +512,7 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     let text_only = d.values.get("textOnly").and_then(Json::as_bool) == Some(true);
     if c.kind == ControlKind::Button {
         let mut text = val(d, "text");
-        ui.label("Text:");
+        ui.label(crate::widgets::tr(ui, "Text:"));
         ui.add(egui::TextEdit::multiline(&mut text).desired_rows(2).desired_width(f32::INFINITY).id_salt("control_text"));
         d.values.insert("text".into(), json!(text));
     } else {
@@ -531,9 +531,9 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         if c.kind == ControlKind::Slider {
             let mut h = d.values.get("horizontal").and_then(Json::as_bool).unwrap_or(true);
             ui.horizontal(|ui| {
-                ui.label("Orientation:");
-                ui.radio_value(&mut h, true, "Horizontal");
-                ui.radio_value(&mut h, false, "Vertical");
+                ui.label(crate::widgets::tr(ui, "Orientation:"));
+                ui.radio_value(&mut h, true, crate::widgets::tr(ui, "Horizontal"));
+                ui.radio_value(&mut h, false, crate::widgets::tr(ui, "Vertical"));
             });
             d.values.insert("horizontal".into(), json!(h));
         }
@@ -541,7 +541,7 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     if !text_only {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Name:");
+            ui.label(crate::widgets::tr(ui, "Name:"));
             let mut name = val(d, "name");
             ui.add(egui::TextEdit::singleline(&mut name).hint_text(c.display_name()).desired_width(200.0).id_salt("control_name"));
             d.values.insert("name".into(), json!(name));

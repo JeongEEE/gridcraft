@@ -102,7 +102,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     Vec::new()
                 };
                 if labels.is_empty() {
-                    ui.label("Can't Undo");
+                    ui.label(crate::widgets::tr(ui, "Can't Undo"));
                 }
                 for (i, l) in labels.iter().enumerate() {
                     if ui.button(format!("Undo {l}")).clicked() {
@@ -128,7 +128,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                         app.run_or_alert(id, json!({}));
                     }
                 }
-                if ui.button("Print…").clicked() {
+                if ui.button(crate::widgets::tr(ui, "Print…")).clicked() {
                     app.print_now(json!({}));
                 }
             });
@@ -145,7 +145,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                 }
                 let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
                 egui::Popup::menu(&share).show(|ui| {
-                    if ui.button("Export as PDF…").clicked() {
+                    if ui.button(crate::widgets::tr(ui, "Export as PDF…")).clicked() {
                         app.run_or_alert("file.exportPdf", json!({}));
                     }
                     for (label, fmt) in

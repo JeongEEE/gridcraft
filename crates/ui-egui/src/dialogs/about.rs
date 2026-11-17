@@ -18,8 +18,8 @@ pub(super) fn about(ui: &mut egui::Ui, d: &mut Dialog) {
             ui.heading("Grid");
             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
             ui.add_space(4.0);
-            ui.label("A personal spreadsheet based on GridCraft by the ArtCraft team.");
-            ui.hyperlink_to("Grid releases and source", "https://github.com/JeongEEE/gridcraft");
+            ui.label(crate::widgets::tr(ui, "A personal spreadsheet based on GridCraft by the ArtCraft team."));
+            ui.hyperlink_to(crate::widgets::tr(ui, "Grid releases and source"), "https://github.com/JeongEEE/gridcraft");
         }
     }
 }
