@@ -205,6 +205,78 @@ class LocalDeployTest(unittest.TestCase):
         self.assertEqual(len(self.release()['assets']),6)
         self.assertFalse((self.gh/'published').exists())
 
+    def test_mac_upload_guides_windows_with_frozen_version_and_source(self):
+        message = self.ok('macos', draft=True)
+        self.assertIn('.\\deploy-windows.ps1 -Version 0.19.7 -Draft', message)
+        self.assertIn('git pull --ff-only origin my-custom', message)
+        self.assertIn(self.sha, message)
+        self.assertIn('macOS: 업로드 완료', message)
+        self.assertIn('Windows: 대기', message)
+        self.assertNotIn('\x1b[', message)
+        self.assertTrue(list((self.repo/'.git/grid-deploy-logs').glob('*.log')))
+
+    def test_windows_upload_guides_mac_finalize_without_another_build(self):
+        self.ok('macos', draft=True)
+        message = self.ok('windows', draft=True)
+        self.assertIn('./deploy-macos.sh 0.19.7 --finalize', message)
+        self.assertIn('git pull --ff-only origin my-custom', message)
+        self.assertIn('Windows: 업로드 완료', message)
+        self.assertNotIn('.\\deploy-windows.ps1 -Version', message)
+
+    def test_windows_first_guides_mac_build_before_finalize(self):
+        message = self.ok('windows', draft=True)
+        self.assertIn('./deploy-macos.sh 0.19.7 --draft', message)
+        self.assertIn('macOS: 대기', message)
+        self.assertNotIn('./deploy-macos.sh 0.19.7 --finalize', message)
+
+    def test_publication_summary_does_not_offer_finalize_again(self):
+        self.ok('macos', draft=True); self.ok('windows', draft=True)
+        message = self.ok(finalize=True, key=True, answer='y')
+        self.assertIn('공개 완료', message)
+        self.assertNotIn('./deploy-macos.sh 0.19.7 --finalize', message)
+
+    def test_build_failure_records_diagnostic_and_preserves_retry_flags(self):
+        def fail():
+            raise deploy.DeployError('simulated interrupted build')
+        self.during_build = fail
+        out = io.StringIO()
+        with patch.object(deploy, 'ROOT', self.repo), patch('platform.system', return_value='Darwin'), \
+                patch('local_build.build', side_effect=self.build), \
+                patch.object(sys, 'argv', ['deploy.py', '--platform', 'macos', '--draft']), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            result = deploy.main()
+        self.assertEqual(result, 1)
+        self.assertIn('./deploy-macos.sh 0.19.7 --draft', out.getvalue())
+        self.assertIn('simulated interrupted build', out.getvalue())
+        self.assertIn('.log', out.getvalue())
+        logs = list((self.repo/'.git/grid-deploy-logs').glob('*.log'))
+        self.assertEqual(len(logs), 1)
+        self.assertIn('simulated interrupted build', logs[0].read_text())
+
+    def test_windows_failure_preserves_draft_and_quoted_key_path(self):
+        self.settings(api_failure=True)
+        out = io.StringIO()
+        with patch.object(deploy, 'ROOT', self.repo), patch('platform.system', return_value='Windows'), \
+                patch.object(sys, 'argv', ['deploy.py', '--platform', 'windows', '--draft', '--key-file', "C:\\keys\\Jeong's grid.hex"]), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            result = deploy.main()
+        self.assertEqual(result, 1)
+        self.assertIn(".\\deploy-windows.ps1 -Version 0.19.7 -Draft -KeyFile 'C:\\keys\\Jeong''s grid.hex'", out.getvalue())
+        self.assertFalse((self.gh/'published').exists())
+
+    def test_long_child_output_is_logged_and_failure_tail_is_visible(self):
+        out = io.StringIO()
+        with patch.object(deploy, 'ROOT', self.repo), contextlib.redirect_stdout(out):
+            deployment = deploy.Deployment(argparse.Namespace())
+            deployment.console.start_log(self.repo/'.git')
+            with self.assertRaises(deploy.DeployError) as raised:
+                deployment.command(sys.executable, '-c',
+                                   'print("first detail"); print("last error"); raise SystemExit(7)', capture=False)
+        self.assertIn('last error', str(raised.exception))
+        self.assertNotIn('first detail', out.getvalue())
+        self.assertIn('first detail', deployment.console.log_path.read_text())
+        self.assertIn('last error', deployment.console.log_path.read_text())
+
     def test_current_published_version_bumps_once_and_other_os_reuses_it(self):
         self.settings(releases=[dict(tag_name='gridcraft-v0.19.7',draft=False,prerelease=False)])
         self.ok('macos',draft=True); self.ok('windows',draft=True)

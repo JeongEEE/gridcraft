@@ -15,6 +15,7 @@ import tempfile
 import tomllib
 
 import local_build
+from deploy_console import Console, retry_command
 import release_assets as assets
 from release_assets import DeployError
 
@@ -61,6 +62,7 @@ def release_lock(path):
 class Deployment:
     def __init__(self, args):
         self.args, self.root = args, ROOT
+        self.console = Console()
         self.env = dict(os.environ, GH_HOST='github.com', GH_PROMPT_DISABLED='1', GH_PAGER='cat', GIT_TERMINAL_PROMPT='0')
         self.env.pop('GRID_UPDATE_PRIVATE_KEY', None)
         xcode = '/Applications/Xcode.app/Contents/Developer'
@@ -77,19 +79,23 @@ class Deployment:
         self.version, self.sha, self.common = '', '', None
         self.tag = ''
 
-    def command(self, *args, capture=True, optional=False, env=None, cwd=None):
+    def command(self, *args, capture=True, optional=False, env=None, cwd=None, label=None):
         args = [str(a) for a in args]
-        result = subprocess.run(args, cwd=cwd or self.root, env=env or self.env, text=True, encoding='utf-8', errors='replace',
-                                stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None)
+        if capture:
+            result = subprocess.run(args, cwd=cwd or self.root, env=env or self.env, text=True, encoding='utf-8', errors='replace',
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        else:
+            result = self.console.run_command(args, cwd or self.root, env or self.env, label or f'{Path(args[0]).name} 실행')
         if result.returncode and not optional:
-            raise DeployError(f'명령 실패: {shlex.join(args)}\n{(result.stderr or result.stdout or "").strip()}')
+            detail = (result.stderr or result.stdout or '').strip() if capture else self.console.tail()
+            raise DeployError(f'명령 실패: {shlex.join(args)}\n{detail}')
         return result
 
     def git(self, *args):
         return self.command('git', *args).stdout.strip()
 
-    def gh(self, *args, capture=True):
-        return self.command('gh', *args, '--repo', REPO, capture=capture)
+    def gh(self, *args, capture=True, label=None):
+        return self.command('gh', *args, '--repo', REPO, capture=capture, label=label)
 
     def clean(self):
         if self.git('status', '--porcelain', '--untracked-files=no'):
@@ -142,19 +148,21 @@ class Deployment:
             if self.args.finalize:
                 raise DeployError('마무리는 빌드했던 버전의 소스를 pull한 뒤 실행하세요.')
             initial = self.sha
-            self.command(self.cargo, 'run', '--quiet', '-p', 'xtask', '--no-default-features', '--', 'version', 'set', self.version, capture=False)
+            self.command(self.cargo, 'run', '--quiet', '-p', 'xtask', '--no-default-features', '--', 'version', 'set', self.version,
+                         capture=False, label=f'버전 {self.version} 준비')
             if self.git('rev-parse', 'HEAD') != initial or self.git('branch', '--show-current') != BRANCH:
                 raise DeployError('버전 준비 중 소스가 변경되었습니다.')
             changed = set(self.git('diff', '--name-only').splitlines())
             if not changed or not changed <= {'Cargo.toml', 'Cargo.lock'} or self.git('diff', '--cached', '--name-only'):
                 raise DeployError('버전 파일 외 변경이 있어 커밋하지 않습니다.')
             self.command('git', 'add', '--', 'Cargo.toml', 'Cargo.lock')
-            self.command('git', 'commit', '--only', '-m', f'chore: Grid {self.version} 릴리스 버전 준비', '--', 'Cargo.toml', 'Cargo.lock', capture=False)
+            self.command('git', 'commit', '--only', '-m', f'chore: Grid {self.version} 릴리스 버전 준비', '--', 'Cargo.toml', 'Cargo.lock',
+                         capture=False, label='버전 파일 커밋')
             self.sha = self.git('rev-parse', 'HEAD')
             if self.git('rev-parse', f'{self.sha}^') != initial:
                 raise DeployError('버전 커밋 중 다른 커밋이 추가되었습니다.')
         self.assert_source()
-        self.command('git', 'push', 'origin', f'{self.sha}:refs/heads/{BRANCH}', capture=False)
+        self.command('git', 'push', 'origin', f'{self.sha}:refs/heads/{BRANCH}', capture=False, label='배포 소스 푸시')
         self.check_tag()
         found = any(r['tag_name'] == self.tag for r in releases)
         if found:
@@ -225,16 +233,17 @@ class Deployment:
         return sorted((r['name'], r['id'], r['size'], r['updatedAt'], r.get('digest')) for r in release['assets'])
 
     def upload_platform(self):
-        print(f'\n로컬 {self.args.platform} 빌드 · Grid {self.version} · {self.sha}', flush=True)
         with tempfile.TemporaryDirectory(prefix='grid-native-build-') as scratch:
             output = Path(scratch)
-            checks = local_build.build(self, output)
-            self.assert_source()
-            receipt = assets.write_receipt(output, self.version, self.sha, self.args.platform, checks)
-            self.view(); self.check_tag()
-            files = [output/n for n in assets.package_names(self.version, self.args.platform)] + [receipt]
-            self.gh('release', 'upload', self.tag, *files, '--clobber', capture=False)
-        print('이 OS의 패키지와 빌드 증빙을 초안에 업로드했습니다.', flush=True)
+            name = 'macOS universal' if self.args.platform == 'macos' else 'Windows x64'
+            with self.console.step(3, 5, f'{name} 빌드·설치 파일 검증'):
+                checks = local_build.build(self, output)
+                self.assert_source()
+                receipt = assets.write_receipt(output, self.version, self.sha, self.args.platform, checks)
+            with self.console.step(4, 5, 'GitHub 초안에 패키지·빌드 증빙 업로드'):
+                self.view(); self.check_tag()
+                files = [output/n for n in assets.package_names(self.version, self.args.platform)] + [receipt]
+                self.gh('release', 'upload', self.tag, *files, '--clobber', capture=False, label='패키지 2개 + 빌드 증빙 업로드')
 
     def key_file(self):
         value = self.args.key_file or self.env.get('GRID_UPDATE_KEY_FILE')
@@ -246,23 +255,25 @@ class Deployment:
         if missing:
             if self.args.finalize:
                 raise DeployError('아직 없는 빌드 파일: '+', '.join(sorted(missing)))
-            print('다른 OS 빌드를 기다리는 초안입니다. 같은 버전·소스를 pull한 뒤 그 OS의 배포 스크립트를 실행하세요.')
-            return
+            self.console.text('  다른 OS 패키지가 아직 없어 초안을 유지합니다.', 'warn')
+            return 'waiting', before
         key = self.key_file()
         if not key.is_file():
             if self.args.finalize:
                 raise DeployError('업데이트 서명 키 파일이 없습니다. --key-file 또는 GRID_UPDATE_KEY_FILE을 지정하세요.')
-            print(f'두 OS 업로드 완료. 키가 있는 PC에서 마무리하세요: ./deploy-macos.sh {self.version} --finalize')
-            return
+            self.console.text('  두 OS 업로드 완료. 기존 서명 키가 있는 MacBook에서 마무리하세요.', 'warn')
+            return 'unsigned', before
         with tempfile.TemporaryDirectory(prefix='grid-release-finalize-') as scratch:
             folder = Path(scratch)
             patterns = [part for name in assets.payload_names(self.version) for part in ['--pattern', name]]
+            self.console.text('  패키지 다운로드·소스 증빙·해시 검사 중…')
             self.gh('release', 'download', self.tag, '--dir', folder, *patterns)
             assets.validate_payloads(folder, self.version, self.sha)
             secret = key.read_text(encoding='utf-8').strip()
             if not re.fullmatch(r'[0-9a-fA-F]{64}', secret):
                 raise DeployError('업데이트 키는 기존 32바이트 seed의 16진수 파일이어야 합니다.')
             # Only the signer subprocess receives the key. Never include it in arguments or logs.
+            self.console.text('  기존 업데이트 키로 서명 중…')
             with local_build.committed_source(self) as source:
                 self.command(self.cargo, 'run', '--quiet', '--locked', '-p', 'gridcraft-update', '--bin', 'grid-update-sign', '--',
                              'sign', folder, self.version, source/'crates/update/public-key.hex', cwd=source,
@@ -272,12 +283,14 @@ class Deployment:
             self.assert_source(); self.check_tag()
             if self.fingerprint(self.view()) != self.fingerprint(before):
                 raise DeployError('검증 중 초안의 파일이 바뀌었습니다. 두 PC에서 동시에 배포하지 말고 다시 실행하세요.')
-            self.gh('release', 'upload', self.tag, folder/'GridUpdate.json', folder/'GridUpdate.sig', folder/'SHA256SUMS.txt', '--clobber', capture=False)
+            self.gh('release', 'upload', self.tag, folder/'GridUpdate.json', folder/'GridUpdate.sig', folder/'SHA256SUMS.txt',
+                    '--clobber', capture=False, label='서명·체크섬 업로드')
             ready = self.view()
             if len(ready['assets']) != 9:
                 raise DeployError('최종 자산 9개가 모두 있어야 공개할 수 있습니다.')
             # Verify the uploaded bytes too; a successful CLI call alone does not prove their content.
             download = folder/'uploaded'; download.mkdir()
+            self.console.text('  최종 자산 9개를 다시 내려받아 업로드 결과 확인 중…')
             self.gh('release', 'download', self.tag, '--dir', download)
             for name in assets.payload_names(self.version) + ['GridUpdate.json', 'GridUpdate.sig', 'SHA256SUMS.txt']:
                 if assets.file_hash(download/name) != assets.file_hash(folder/name):
@@ -292,13 +305,17 @@ class Deployment:
                     self.assert_source(); self.check_tag()
                     if self.fingerprint(self.view()) != self.fingerprint(ready):
                         raise DeployError('확인 중 릴리스 자산이 바뀌어 공개하지 않습니다.')
-                    self.gh('release', 'edit', self.tag, '--draft=false', '--latest', capture=False)
-                    print(f'배포 완료 · Grid {self.version}')
-                    return
-            print('초안을 유지했습니다. 나중에 --finalize로 공개 확인을 이어갈 수 있습니다.')
+                    self.gh('release', 'edit', self.tag, '--draft=false', '--latest', capture=False, label='릴리스 공개')
+                    # Draft URLs can change when GitHub publishes the release.
+                    ready['url'] = f'https://github.com/{REPO}/releases/tag/{self.tag}'
+                    return 'published', ready
+            return 'ready', ready
 
     def run(self):
-        current = self.local_preflight()
+        self.console.banner(self.args.platform, self.args.finalize, self.args.dry_run)
+        total = 3 if self.args.finalize else 5
+        with self.console.step(1, total, '브랜치·변경 사항·버전 확인'):
+            current = self.local_preflight()
         if self.args.dry_run:
             print(f'[dry-run] Grid {self.version} · {self.args.platform} 로컬 '+('마무리' if self.args.finalize else '빌드'))
             print('미공개 버전은 재사용하고, 현재 버전이 공개됐다면 다음 패치를 준비합니다. Actions 호출·배포 브랜치 푸시 없음.')
@@ -307,13 +324,22 @@ class Deployment:
         common = Path(self.git('rev-parse', '--git-common-dir'))
         self.common = common if common.is_absolute() else self.root/common
         with release_lock(self.common/'grid-deploy.lock'):
-            self.prepare(current)
+            self.console.start_log(self.common)
+            with self.console.step(2, total, 'GitHub 인증·배포 소스·릴리스 초안 준비'):
+                self.prepare(current)
+                self.console.text(f'  Grid {self.version} · {self.sha[:8]}')
             if not self.args.finalize:
                 self.upload_platform()
-            self.finalize()
+            with self.console.step(total, total, '두 OS 준비 상태·서명·공개 확인'):
+                status, release = self.finalize()
+            self.console.result(self, status, release)
 
 
 def main():
+    # PowerShell's legacy code pages cannot represent every Korean status glyph.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description='Grid OS별 로컬 빌드 → GitHub 릴리스 초안 업로드 → 서명·공개 확인')
     parser.add_argument('version', nargs='?', help='X.Y.Z. 생략하면 현재 미공개 버전 재사용, 공개됐으면 다음 패치')
     parser.add_argument('--platform', choices=['macos', 'windows'], required=True)
@@ -326,9 +352,7 @@ def main():
     try:
         deployment.run()
     except (DeployError, OSError, ValueError, KeyError, TypeError) as error:
-        print(f'\n배포 중단: {error}', file=sys.stderr)
-        command = f'./deploy-macos.sh {deployment.version}' if args.platform == 'macos' else f'.\\deploy-windows.ps1 -Version {deployment.version}'
-        print('같은 버전으로 재시도: '+command+(' --finalize' if args.finalize and args.platform == 'macos' else ' -Finalize' if args.finalize else ''), file=sys.stderr)
+        deployment.console.failure(error, retry_command(args, deployment.version))
         return 1
     except KeyboardInterrupt:
         print('\n로컬 배포를 중단했습니다. 초안은 유지되며 같은 버전으로 다시 실행할 수 있습니다.', file=sys.stderr)

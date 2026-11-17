@@ -15,8 +15,9 @@ def prepare_fonts(deployment):
         if configured:
             raise DeployError(f'CRAFT_FONTS_DIR가 없습니다: {fonts}')
         fonts.parent.mkdir(parents=True, exist_ok=True)
-        d.command('git', 'clone', '--no-checkout', 'https://github.com/storytold/craft-fonts.git', fonts, capture=False)
-        d.command('git', '-C', fonts, 'checkout', '--detach', FONTS_SHA, capture=False)
+        d.command('git', 'clone', '--no-checkout', 'https://github.com/storytold/craft-fonts.git', fonts,
+                  capture=False, label='릴리스 글꼴 다운로드')
+        d.command('git', '-C', fonts, 'checkout', '--detach', FONTS_SHA, capture=False, label='고정 글꼴 버전 준비')
     actual = d.command('git', '-C', fonts, 'rev-parse', 'HEAD').stdout.strip()
     dirty = d.command('git', '-C', fonts, 'status', '--porcelain').stdout.strip()
     if actual != FONTS_SHA or dirty:
@@ -50,27 +51,30 @@ def build_source(d, output, source):
     def run(*args, **kwargs):
         return d.command(*args, cwd=source, **kwargs)
 
-    run(os.sys.executable, 'packaging/test_fork_contract.py', capture=False)
-    run(d.cargo, 'test', '--locked', '-p', 'gridcraft-update', capture=False)
+    run(os.sys.executable, 'packaging/test_fork_contract.py', capture=False, label='포크 설치 식별자 검증')
+    run(d.cargo, 'test', '--locked', '-p', 'gridcraft-update', capture=False, label='자동 업데이트 회귀 검사')
     if d.args.platform == 'macos':
-        run('bash', 'packaging/macos/package.sh', '--arch', 'universal', capture=False)
+        run('bash', 'packaging/macos/package.sh', '--arch', 'universal', capture=False, label='macOS universal 빌드·DMG 패키징')
         cli = d.root/'target/macos-package/bin/gridcraft-cli'
         run(d.cargo, 'test', '--locked', '-p', 'gridcraft-update', '--lib', 'native_dmg_roundtrip', '--', '--ignored',
-                  capture=False, env=dict(d.env, GRID_UPDATE_SMOKE_PACKAGE=str(output/package_names(d.version, 'macos')[0])))
+                  capture=False, label='DMG 업데이트·실패 시 복원 검증',
+                  env=dict(d.env, GRID_UPDATE_SMOKE_PACKAGE=str(output/package_names(d.version, 'macos')[0])))
     else:
-        run('pwsh', '-NoProfile', '-File', 'packaging/windows/package.ps1', '-Arch', 'x64', capture=False)
+        run('pwsh', '-NoProfile', '-File', 'packaging/windows/package.ps1', '-Arch', 'x64',
+            capture=False, label='Windows x64 빌드·MSI/ZIP 패키징')
         cli = d.root/'target/windows-package/x64/grid-cli.exe'
         # The MSI's static policy check is part of package.ps1. Installation tests are
         # deliberately limited to a disposable machine; never touch a personal install.
         run(d.cargo, 'test', '--locked', '-p', 'gridcraft-update', '--lib', 'native_windows_portable_roundtrip', '--', '--ignored',
-                  capture=False, env=dict(d.env, GRID_UPDATE_SMOKE_PACKAGE=str(output/package_names(d.version, 'windows')[1])))
+                  capture=False, label='포터블 업데이트·실패 시 복원 검증',
+                  env=dict(d.env, GRID_UPDATE_SMOKE_PACKAGE=str(output/package_names(d.version, 'windows')[1])))
     if d.version not in d.command(cli, '--version').stdout:
         raise DeployError('빌드한 CLI의 버전이 다릅니다.')
     if d.command(cli, 'eval', '=SUM(1,2,3)').stdout.strip() != '6':
         raise DeployError('CLI 계산 검증에 실패했습니다.')
     with tempfile.TemporaryDirectory(prefix='grid-cli-smoke-') as scratch:
         book = Path(scratch)/'budget.xlsx'
-        d.command(cli, 'run', '--sample', 'budget', '--out', book, capture=False)
-        d.command(cli, 'cat', book, '--range', 'B4:F8', capture=False)
+        d.command(cli, 'run', '--sample', 'budget', '--out', book, capture=False, label='XLSX 저장 검증')
+        d.command(cli, 'cat', book, '--range', 'B4:F8', capture=False, label='XLSX 재열기 검증')
     d.assert_source()
     return ['fork-identity', 'updater-tests', 'package-policy', 'cli-smoke']
