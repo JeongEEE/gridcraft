@@ -53,6 +53,9 @@ elif args[:2] == ['release', 'download']:
         if not patterns or a['name'] in patterns: shutil.copyfile(base/'assets'/a['name'], folder/a['name'])
     sys.exit(0)
 elif args[:2] == ['release', 'edit']:
+    if '--target' in args: r['targetCommitish'] = args[args.index('--target')+1]
+    if '--notes-file' in args: r['body'] = pathlib.Path(args[args.index('--notes-file')+1]).read_text()
+    if '--draft=true' in args: r['isDraft'] = True
     if '--draft=false' in args:
         r['isDraft'] = False; (base/'published').touch()
 else:
@@ -234,6 +237,103 @@ class LocalDeployTest(unittest.TestCase):
     def test_other_source_draft_cannot_receive_upload(self):
         self.ok(draft=True); self.change_release(targetCommitish='a'*40)
         self.assertFalse(self.run_deploy('windows')[0]); self.assertEqual(len(self.release()['assets']),3)
+
+    def create_empty_draft(self):
+        def fail():
+            raise deploy.DeployError('simulated interrupted build')
+        self.during_build = fail
+        self.assertFalse(self.run_deploy(draft=True)[0])
+        self.during_build = None
+        self.assertEqual(self.release()['assets'], [])
+
+    def advance_source(self):
+        (self.repo/'source.rs').write_text('// changed after upstream merge\n')
+        self.git('add', 'source.rs'); self.git('commit', '-m', 'upstream merged')
+        return self.git('rev-parse', 'HEAD')
+
+    def test_empty_untagged_draft_follows_updated_source_before_retry(self):
+        self.create_empty_draft()
+        current = self.advance_source()
+        self.ok(draft=True)
+        release = self.release()
+        self.assertEqual(release['targetCommitish'], current)
+        self.assertIn(f'Source commit: `{current}`', release['body'])
+        self.assertNotIn(f'Source commit: `{self.sha}`', release['body'])
+        self.assertEqual(release['tagName'], 'gridcraft-v0.19.7')
+        self.assertEqual(len(release['assets']), 3)
+        self.assertTrue(release['isDraft'])
+        self.assertEqual(self.git('rev-list', '--count', 'HEAD'), '2')
+        self.assertFalse((self.gh/'published').exists())
+
+    def test_uploaded_draft_does_not_follow_updated_source(self):
+        self.ok(draft=True)
+        original = self.release()
+        self.advance_source()
+        self.assertFalse(self.run_deploy('windows')[0])
+        self.assertEqual(self.release(), original)
+        self.assertEqual(self.builds, ['macos'])
+
+    def test_tagged_empty_draft_is_not_retargeted(self):
+        self.create_empty_draft()
+        self.advance_source()
+        self.git('tag', 'gridcraft-v0.19.7')
+        self.git('push', 'origin', 'refs/tags/gridcraft-v0.19.7')
+        original = self.release()
+        self.assertFalse(self.run_deploy()[0])
+        self.assertEqual(self.release(), original)
+
+    def test_empty_draft_with_wrong_source_marker_is_not_retargeted(self):
+        self.create_empty_draft()
+        self.advance_source()
+        self.change_release(body='Source commit: `'+'a'*40+'`')
+        original = self.release()
+        self.assertFalse(self.run_deploy()[0])
+        self.assertEqual(self.release(), original)
+
+    def test_finalize_does_not_retarget_an_empty_draft(self):
+        self.create_empty_draft()
+        self.advance_source()
+        original = self.release()
+        self.assertFalse(self.run_deploy(finalize=True, key=True)[0])
+        self.assertEqual(self.release(), original)
+
+    def test_empty_draft_from_another_version_is_not_retargeted(self):
+        for name in ['Cargo.toml', 'Cargo.lock']:
+            p = self.repo/name
+            p.write_text(p.read_text().replace('0.19.7', '0.19.6'))
+        self.git('add', 'Cargo.toml', 'Cargo.lock'); self.git('commit', '-m', 'older version')
+        self.create_empty_draft()
+        for name in ['Cargo.toml', 'Cargo.lock']:
+            p = self.repo/name
+            p.write_text(p.read_text().replace('0.19.6', '0.19.7'))
+        self.git('add', 'Cargo.toml', 'Cargo.lock'); self.git('commit', '-m', 'new version')
+        self.change_release(tagName='gridcraft-v0.19.7')
+        original = self.release()
+        self.assertFalse(self.run_deploy()[0])
+        self.assertEqual(self.release(), original)
+
+    def test_empty_draft_from_unrelated_history_is_not_retargeted(self):
+        self.create_empty_draft()
+        orphan = self.git('commit-tree', self.git('rev-parse', 'HEAD^{tree}'), '-m', 'unrelated history')
+        self.change_release(targetCommitish=orphan, body=f'Source commit: `{orphan}`')
+        original = self.release()
+        self.assertFalse(self.run_deploy()[0])
+        self.assertEqual(self.release(), original)
+
+    def test_new_asset_during_empty_draft_check_prevents_retarget(self):
+        self.create_empty_draft()
+        self.advance_source()
+        read = deploy.Deployment.read_release
+        calls = []
+        def changed(d):
+            calls.append(None)
+            if len(calls) == 2:
+                self.change_release(assets=[dict(name='grid-0.19.7-windows-x64.msi', size=100, state='uploaded')])
+            return read(d)
+        with patch.object(deploy.Deployment, 'read_release', changed):
+            self.assertFalse(self.run_deploy()[0])
+        self.assertEqual(self.release()['targetCommitish'], self.sha)
+        self.assertFalse(any(c[:2] == ['release', 'edit'] for c in self.calls()))
 
     def test_source_edit_during_build_prevents_upload(self):
         self.during_build=lambda: (self.repo/'source.rs').write_text('// concurrent edit')

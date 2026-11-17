@@ -158,7 +158,7 @@ class Deployment:
         self.check_tag()
         found = any(r['tag_name'] == self.tag for r in releases)
         if found:
-            self.view()
+            self.prepare_existing_draft()
         elif self.args.finalize:
             raise DeployError('릴리스 초안이 없습니다. 각 OS 빌드를 먼저 실행하세요.')
         else:
@@ -170,13 +170,47 @@ class Deployment:
                         '--draft', '--notes-file', notes)
             self.view()
 
+    def tag_refs(self):
+        return self.git('ls-remote', '--tags', 'origin', f'refs/tags/{self.tag}', f'refs/tags/{self.tag}^{{}}').splitlines()
+
     def check_tag(self):
-        rows = self.git('ls-remote', '--tags', 'origin', f'refs/tags/{self.tag}', f'refs/tags/{self.tag}^{{}}').splitlines()
+        rows = self.tag_refs()
         if rows and ([r for r in rows if r.endswith('^{}')] or rows)[0].split()[0] != self.sha:
             raise DeployError('기존 태그가 다른 소스를 가리킵니다. 덮어쓰지 않습니다.')
 
+    def read_release(self):
+        return json.loads(self.gh('release', 'view', self.tag, '--json', FIELDS).stdout)
+
+    def prepare_existing_draft(self):
+        release = self.read_release()
+        old = release['targetCommitish']
+        if old != self.sha:
+            # Failed builds can leave an empty draft behind. Only an untagged, empty
+            # ancestor draft of this version may move; existing build payloads stay bound.
+            if (self.args.finalize or release['tagName'] != self.tag or not release['isDraft']
+                    or release['isPrerelease'] or release['assets'] != [] or self.tag_refs()
+                    or not re.fullmatch(r'[0-9a-f]{40}', old)
+                    or release['body'].count(f'Source commit: `{old}`') != 1
+                    or self.command('git', 'merge-base', '--is-ancestor', old, self.sha, optional=True).returncode):
+                raise DeployError(f'초안 소스 {old[:8]}와 현재 소스 {self.sha[:8]}가 다릅니다. '
+                                  '파일·태그가 있는 초안은 갱신하지 않습니다. 두 PC의 커밋을 맞추거나 새 버전을 사용하세요.')
+            previous = tomllib.loads(self.git('show', f'{old}:Cargo.toml'))['workspace']['package']['version']
+            if previous != self.version:
+                raise DeployError('빈 초안도 이전 소스의 버전이 다르면 갱신하지 않습니다. 새 버전을 사용하세요.')
+            self.assert_source()
+            if self.read_release() != release or self.tag_refs():
+                raise DeployError('확인 중 초안 또는 태그가 바뀌어 갱신하지 않습니다. 다시 실행하세요.')
+            with tempfile.TemporaryDirectory(prefix='grid-empty-draft-') as scratch:
+                notes = Path(scratch)/'notes.md'
+                notes.write_text(release['body'].replace(f'Source commit: `{old}`', f'Source commit: `{self.sha}`'), encoding='utf-8')
+                self.gh('release', 'edit', self.tag, '--draft=true', '--target', self.sha, '--notes-file', notes)
+            print(f'파일이 없는 초안을 현재 소스로 갱신했습니다 · {old[:8]} → {self.sha[:8]}', flush=True)
+            if self.read_release()['assets'] != []:
+                raise DeployError('초안 갱신 중 다른 파일이 업로드되었습니다. 동시에 배포하지 말고 소스를 확인하세요.')
+        self.view()
+
     def view(self):
-        release = json.loads(self.gh('release', 'view', self.tag, '--json', FIELDS).stdout)
+        release = self.read_release()
         if (release['tagName'] != self.tag or not release['isDraft'] or release['isPrerelease']
                 or release['targetCommitish'] != self.sha or f'Source commit: `{self.sha}`' not in release['body']):
             raise DeployError('같은 소스 커밋의 미공개 초안이 아닙니다. 두 PC에서 같은 버전을 pull하세요.')

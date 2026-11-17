@@ -116,6 +116,8 @@ Windows: PowerShell 7(`pwsh`), Visual Studio Build Tools의 **Desktop developmen
 (MSVC x64, Windows SDK), .NET SDK와 WiX 5.0.2를 준비한다. **Developer PowerShell for VS**에서
 실행하면 SDK의 `rc.exe` 등 도구 경로가 잡힌다. PowerShell 실행 정책이 차단하면 해당 터미널에서만
 `Set-ExecutionPolicy -Scope Process Bypass`를 사용한다.
+Mac의 `.env`나 업데이트 개인키를 복사할 필요는 없다. GitHub 인증은 Windows에서 별도로
+`gh auth login`을 실행하고, 두 OS 업로드 후 기존 키가 있는 Mac에서 서명·공개를 마무리한다.
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc
@@ -151,7 +153,12 @@ git pull --ff-only origin my-custom
 
 각 PC는 자기 OS의 두 패키지와 빌드 증빙 JSON만 같은 초안에 올린다. 빌드는 미추적 파일을
 제외한 확정 커밋의 임시 로컬 clone에서 수행한다. 긴 빌드 중 원래 체크아웃이 바뀌면
-업로드를 중단한다. 다른 SHA의 초안을 재지정하거나 이미 공개된 파일을 덮어쓰지 않는다.
+업로드를 중단한다. 빌드 실패 후 **자산이 0개이고 태그도 없는 미공개 초안**만 예외로,
+같은 버전의 이전 커밋에서 현재 커밋으로 자동 갱신한다. 이전 커밋은 현재 소스의 조상이어야
+하며 기존 Source commit 기록도 일치해야 한다. 따라서 첫 업로드 전에 upstream을 머지하거나
+배포 도구를 고쳤어도 같은 명령으로 다시 시작할 수 있다. 이미 파일·태그가 있거나 공개된
+릴리스는 재지정하지 않는다. 두 OS 중 하나라도 업로드했다면 같은 커밋으로 맞추거나 새 버전을
+준비한다. `--finalize`는 빈 초안을 갱신하지 않는다.
 
 Windows PC에는 업데이트 개인키가 없어도 된다. 두 OS가 모이면 키가 있는 Mac에서
 빌드 없이 검증·서명·공개 확인을 마무리한다.
@@ -174,7 +181,8 @@ Windows PC에는 업데이트 개인키가 없어도 된다. 두 OS가 모이면
 `--dry-run`/`-DryRun`은 네트워크·파일·커밋을 변경하지 않고 예정된 동작을 보여 준다.
 기존 `./deploy.sh`도 동일한 Mac 로컬 흐름이며 Actions로 돌아가는 옵션은 없다.
 실패하면 같은 버전으로 재실행한다. 버전 준비 중 미커밋 파일이 남았다면 먼저 확인한다.
-초안의 소스를 바꿔야 한다면 새 버전을 준비하며 기존 초안을 임의로 다른 SHA에 연결하지 않는다.
+파일이 올라간 초안의 소스를 바꿔야 한다면 새 버전을 준비한다. 빈 초안의 갱신 중 다른
+업로드·태그·메타데이터 변경이 감지되면 중단하므로 두 PC에서 동시에 배포하지 않는다.
 
 ### 로컬 검증 범위
 
