@@ -5,11 +5,12 @@ upstream contribution workflow below for work in this fork.
 
 - `main` mirrors `upstream/main`; never commit personal changes or merge `my-custom` into it.
 - Develop, commit and push personal changes on `my-custom`. Stage only the task's explicit paths.
-- `my-custom-release` receives reviewed `my-custom` changes only for an authorized release run.
+- `my-custom-release` is a legacy Actions release branch; local deployment does not push it.
 - Upstream issue claims, upstream PR requirements and shared-CI-only policies apply when
   contributing upstream. Do not post upstream issues/comments for personal fork work.
-- The fork-specific `.github/workflows/release-custom.yml` owns Windows/macOS draft releases.
-  Keep upstream workflows intact; never publish a release without user authorization.
+- `deploy-macos.sh` and `deploy-windows.ps1` build locally and upload to a shared draft release.
+  Never invoke Actions for fork deployment. Keep upstream workflows intact; never publish a
+  release without user authorization. Two OS builds must use the same source SHA and version.
 - Keep app name `Grid`, bundle id `io.github.jeongeee.grid`, updater app id `grid`, and
   updater repository `JeongEEE/gridcraft` independent from upstream. Cargo names remain unchanged.
 - Follow `docs/custom-release.md` for versioning and packaging. Maintain the Grid section in

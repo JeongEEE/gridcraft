@@ -1,4 +1,7 @@
-"""Deployment integration tests: real temporary git remotes, no GitHub writes or builds."""
+"""Local-release integration tests: real git/remotes/files; external GitHub and build boundaries only."""
+import argparse
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -7,295 +10,290 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parent
+sys.path.insert(0, str(SOURCE))
+import deploy
 
 GH = r'''#!/usr/bin/env python3
-import json, os, pathlib, subprocess, sys, tomllib
+import hashlib, json, os, pathlib, shutil, sys
 args = sys.argv[1:]
-state = json.loads(pathlib.Path(os.environ['TEST_STATE']).read_text())
-with open(os.environ['TEST_CALLS'], 'a') as f:
-    f.write(json.dumps(args) + '\n')
-sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
-names = [f'grid-{version}-macos-universal.dmg', f'grid-cli-{version}-macos-universal.zip',
-         f'grid-{version}-windows-x64.msi', f'grid-{version}-windows-x64-portable.zip',
-         'SHA256SUMS.txt', 'GridUpdate.json', 'GridUpdate.sig']
-if args[:2] == ['auth', 'status']:
-    sys.exit(1 if state.get('auth_failure') else 0)
+base = pathlib.Path(os.environ['TEST_GH'])
+settings = json.loads((base/'settings.json').read_text())
+with (base/'calls').open('a') as f: f.write(json.dumps(args)+'\n')
+if settings.get('api_failure') and args[0] == 'api':
+    print('network failure', file=sys.stderr); sys.exit(1)
+p = base/'release.json'
+r = json.loads(p.read_text()) if p.exists() else None
+if args[:2] == ['auth', 'status']: sys.exit(0)
 if args[0] == 'api':
-    if state.get('api_failure'):
-        print('network failure', file=sys.stderr); sys.exit(1)
-    if state.get('edit_during_preflight'):
-        pathlib.Path('source.rs').write_text('// concurrent unfinished edit\n')
-    print(json.dumps([state.get('releases', [])])); sys.exit(0)
-run = dict(databaseId=123, headSha=sha, headBranch='my-custom-release', status='completed',
-           conclusion='success', url='https://github.com/JeongEEE/gridcraft/actions/runs/123')
-if args[:2] == ['run', 'list']:
-    polls = sum(json.loads(line)[:2] == ['run', 'list'] for line in pathlib.Path(os.environ['TEST_CALLS']).read_text().splitlines())
-    if state.get('manual_run_missing') or (not pathlib.Path(os.environ['TEST_DISPATCHED']).exists()
-            and (state.get('push_run_missing') or polls <= state.get('push_run_delayed_polls', 0))):
-        if state.get('release_ref_changed'):
-            subprocess.run(['git', 'push', 'origin', 'HEAD^:refs/heads/my-custom-release', '--force'], check=True, capture_output=True)
-        print('[]'); sys.exit(0)
-    if pathlib.Path(os.environ['TEST_DISPATCHED']).exists():
-        run['databaseId'] = 124
-    elif state.get('failed_run'):
-        run['conclusion'] = 'failure'
-    print(json.dumps([run])); sys.exit(0)
-if args[:2] == ['run', 'watch']:
-    sys.exit(1 if state.get('build_failure') else 0)
-if args[:2] == ['workflow', 'run']:
-    pathlib.Path(os.environ['TEST_DISPATCHED']).touch()
-    sys.exit(0)
-if args[:2] == ['run', 'view']:
-    run['headSha'] = state.get('run_sha', sha)
-    run['jobs'] = [dict(name=n, conclusion='success') for n in ['version', 'macos', 'windows', 'draft']]
-    print(json.dumps(run)); sys.exit(0)
+    rows = settings.get('releases', [])
+    if r: rows = rows + [dict(tag_name=r['tagName'], draft=r['isDraft'], prerelease=False)]
+    print(json.dumps([rows])); sys.exit(0)
 if args[:2] == ['release', 'view']:
-    if state.get('missing_asset'): names.remove('GridUpdate.sig')
-    release = dict(tagName='gridcraft-v'+version, isDraft=True, isPrerelease=False,
-                   targetCommitish=state.get('draft_sha', sha), body=f'Source commit: `{sha}`',
-                   assets=[dict(name=n, size=100, state='uploaded') for n in names],
-                   url='https://github.com/JeongEEE/gridcraft/releases/tag/gridcraft-v'+version)
-    print(json.dumps(release)); sys.exit(0)
-if args[:2] == ['release', 'edit']:
-    pathlib.Path(os.environ['TEST_PUBLISHED']).write_text(args[2]); sys.exit(0)
-print('unexpected gh command: '+str(args), file=sys.stderr); sys.exit(2)
+    if not r: sys.exit(1)
+    print(json.dumps(r)); sys.exit(0)
+if args[:2] == ['release', 'create']:
+    if r: sys.exit(1)
+    r = dict(tagName=args[2], isDraft=True, isPrerelease=False, targetCommitish=args[args.index('--target')+1],
+             body=pathlib.Path(args[args.index('--notes-file')+1]).read_text(), assets=[], url='https://github.com/JeongEEE/gridcraft/releases/draft')
+elif args[:2] == ['release', 'upload']:
+    files = args[3:args.index('--clobber')]
+    for name in files:
+        f = pathlib.Path(name); data = f.read_bytes(); shutil.copyfile(f, base/'assets'/f.name)
+        r['assets'] = [a for a in r['assets'] if a['name'] != f.name]
+        counter = int((base/'counter').read_text()) if (base/'counter').exists() else 0
+        (base/'counter').write_text(str(counter+1))
+        r['assets'].append(dict(name=f.name, size=len(data), state='uploaded', id=str(counter), updatedAt=str(counter), digest='sha256:'+hashlib.sha256(data).hexdigest()))
+elif args[:2] == ['release', 'download']:
+    folder = pathlib.Path(args[args.index('--dir')+1]); folder.mkdir(parents=True, exist_ok=True)
+    patterns = [args[i+1] for i,a in enumerate(args) if a == '--pattern']
+    for a in r['assets']:
+        if not patterns or a['name'] in patterns: shutil.copyfile(base/'assets'/a['name'], folder/a['name'])
+    sys.exit(0)
+elif args[:2] == ['release', 'edit']:
+    if '--draft=false' in args:
+        r['isDraft'] = False; (base/'published').touch()
+else:
+    print('Unexpected gh command: '+str(args), file=sys.stderr); sys.exit(2)
+p.write_text(json.dumps(r))
 '''
 
 CARGO = r'''#!/usr/bin/env python3
-import pathlib, sys, tomllib
-new = sys.argv[-1]
-manifest = pathlib.Path('Cargo.toml')
-old = tomllib.loads(manifest.read_text())['workspace']['package']['version']
-for name in ['Cargo.toml', 'Cargo.lock']:
-    p = pathlib.Path(name)
-    p.write_text(p.read_text().replace('version = "'+old+'"', 'version = "'+new+'"'))
+import hashlib, json, os, pathlib, sys, tomllib
+args=sys.argv[1:]
+base=pathlib.Path(os.environ['TEST_GH'])
+if 'version' in args:
+    new=args[-1]
+    old=tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
+    for name in ['Cargo.toml','Cargo.lock']:
+        p=pathlib.Path(name); p.write_text(p.read_text().replace('version = "'+old+'"','version = "'+new+'"'))
+    sys.exit(0)
+if 'sign' in args:
+    if json.loads((base/'settings.json').read_text()).get('sign_failure'): sys.exit(1)
+    (base/'sign-source').write_text(pathlib.Path('source.rs').read_text())
+    i=args.index('sign'); folder=pathlib.Path(args[i+1]); version=args[i+2]
+    rows=[]
+    for suffix in ['macos-universal.dmg','windows-x64.msi','windows-x64-portable.zip']:
+        name='grid-'+version+'-'+suffix; data=(folder/name).read_bytes()
+        rows.append(dict(name=name,size=len(data),sha256=hashlib.sha256(data).hexdigest()))
+    (folder/'GridUpdate.json').write_text(json.dumps(dict(schema=1,repository='JeongEEE/gridcraft',version=version,tag='gridcraft-v'+version,assets=rows)))
+    (folder/'GridUpdate.sig').write_text('aa'*64)
+    sys.exit(0)
+print('Unexpected cargo command',args,file=sys.stderr); sys.exit(2)
 '''
 
 
-class DeployTest(unittest.TestCase):
+class LocalDeployTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix='grid-deploy-test-')
+        self.tmp = tempfile.TemporaryDirectory(prefix='grid-local-release-')
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)
-        self.repo = self.base / 'repo'
-        self.repo.mkdir()
-        self.remote = self.base / 'remote.git'
-        self.env = os.environ.copy()
-        self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0')
-        self.git('init', '-b', 'my-custom')
-        self.git('config', 'user.name', 'Deployment Test')
-        self.git('config', 'user.email', 'deploy@example.invalid')
-        self.git('init', '--bare', str(self.remote))
-        self.git('remote', 'add', 'origin', 'https://github.com/JeongEEE/gridcraft.git')
-        self.git('config', f'url.{self.remote}.insteadOf', 'https://github.com/JeongEEE/gridcraft.git')
-        (self.repo / 'packaging').mkdir()
-        for name in ['deploy.py']:
-            if (SOURCE / name).exists():
-                shutil.copy(SOURCE / name, self.repo / 'packaging' / name)
-        if (SOURCE.parent / 'deploy.sh').exists():
-            shutil.copy(SOURCE.parent / 'deploy.sh', self.repo / 'deploy.sh')
-        (self.repo / 'Cargo.toml').write_text('[workspace.package]\nversion = "0.19.5"\n')
-        (self.repo / 'Cargo.lock').write_text('version = "0.19.5"\n')
-        (self.repo / 'source.rs').write_text('// committed source\n')
-        self.git('add', 'Cargo.toml', 'Cargo.lock', 'source.rs', 'packaging')
-        self.git('commit', '-m', 'initial')
-        self.initial = self.git('rev-parse', 'HEAD')
-        self.git('push', 'origin', 'HEAD:refs/heads/my-custom', 'HEAD:refs/heads/my-custom-release')
-        self.bin = self.base / 'bin'
-        self.bin.mkdir()
+        self.repo = self.base/'repo'; self.repo.mkdir()
+        self.remote = self.base/'remote.git'
+        self.gh = self.base/'github'; self.gh.mkdir(); (self.gh/'assets').mkdir()
+        self.settings()
+        self.bin = self.base/'bin'; self.bin.mkdir()
         for name, source in [('gh', GH), ('cargo', CARGO)]:
-            p = self.bin / name
-            p.write_text(source.replace('#!/usr/bin/env python3', '#!' + sys.executable, 1))
-            p.chmod(0o755)
-        self.state = self.base / 'state.json'
-        self.state.write_text('{}')
-        self.published = self.base / 'published'
-        self.calls = self.base / 'calls.jsonl'
-        self.env.update(PATH=str(self.bin)+os.pathsep+self.env['PATH'], TEST_STATE=str(self.state),
-                        TEST_PUBLISHED=str(self.published), TEST_CALLS=str(self.calls), TEST_DISPATCHED=str(self.base / 'dispatched'))
+            p = self.bin/name
+            p.write_text(source.replace('#!/usr/bin/env python3', '#!'+sys.executable, 1)); p.chmod(0o755)
+        self.env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1',
+                        GIT_TERMINAL_PROMPT='0', TEST_GH=str(self.gh), GRID_UPDATE_KEY_FILE=str(self.base/'absent.hex'), PATH=str(self.bin)+os.pathsep+os.environ['PATH'])
+        self.env_patch = patch.dict(os.environ, self.env); self.env_patch.start(); self.addCleanup(self.env_patch.stop)
+        self.git('init','-b','my-custom'); self.git('config','user.name','Release Test'); self.git('config','user.email','test@example.invalid')
+        self.git('init','--bare',str(self.remote))
+        self.git('remote','add','origin','https://github.com/JeongEEE/gridcraft.git')
+        self.git('config',f'url.{self.remote}.insteadOf','https://github.com/JeongEEE/gridcraft.git')
+        (self.repo/'Cargo.toml').write_text('[workspace.package]\nversion = "0.19.7"\n')
+        (self.repo/'Cargo.lock').write_text('version = "0.19.7"\n')
+        (self.repo/'source.rs').write_text('// committed source\n')
+        (self.repo/'crates/update').mkdir(parents=True)
+        (self.repo/'crates/update/public-key.hex').write_text('00'*32)
+        self.git('add','Cargo.toml','Cargo.lock','source.rs','crates/update/public-key.hex'); self.git('commit','-m','initial')
+        self.sha = self.git('rev-parse','HEAD')
+        self.git('push','origin','HEAD:refs/heads/my-custom')
+        self.key = self.base/'private.hex'; self.key.write_text('2a'*32)
+        self.builds = []
+        self.during_build = None
 
     def git(self, *args):
-        return subprocess.check_output(['git', *args], cwd=self.repo, env=self.env, stderr=subprocess.DEVNULL, text=True).strip()
+        return subprocess.check_output(['git',*args],cwd=self.repo,env=self.env,text=True,stderr=subprocess.DEVNULL).strip()
 
     def settings(self, **values):
-        self.state.write_text(json.dumps(values))
+        (self.gh/'settings.json').write_text(json.dumps(values))
 
-    def deploy(self, *args, answer='n\n', fast_clock=False):
-        command = [sys.executable, str(self.repo / 'packaging/deploy.py'), *args]
-        if fast_clock:
-            # Advance only the subprocess's wall-clock boundary; retain real git and script behavior.
-            command = [sys.executable, '-c', 'import itertools, runpy, sys, time; '
-                       'ticks=itertools.count(0, 5); time.monotonic=lambda: next(ticks); '
-                       'time.sleep=lambda seconds: None; '
-                       'sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0], run_name="__main__")', *command[1:]]
-        return subprocess.run(command, cwd=self.repo,
-                              env=self.env, input=answer, text=True, capture_output=True, timeout=30)
+    def build(self, deployment, output):
+        from release_assets import package_names
+        self.builds.append(deployment.args.platform)
+        for name in package_names(deployment.version, deployment.args.platform):
+            (output/name).write_bytes(('native package '+name).encode())
+        if self.during_build: self.during_build()
+        return ['fork-identity','updater-tests','package-policy','cli-smoke']
 
-    def assert_ok(self, result):
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+    def run_deploy(self, os_name='macos', version=None, *, finalize=False, key=False, draft=False, dry_run=False, answer='n'):
+        args = argparse.Namespace(platform=os_name, version=version, finalize=finalize, draft=draft, dry_run=dry_run,
+                                  key_file=str(self.key) if key else None)
+        out = io.StringIO()
+        try:
+            with patch.object(deploy,'ROOT',self.repo), patch('platform.system',return_value='Darwin' if os_name=='macos' else 'Windows'), \
+                    patch('local_build.build',side_effect=self.build), patch('builtins.input',side_effect=EOFError if answer is None else lambda prompt: answer), \
+                    contextlib.redirect_stdout(out):
+                deploy.Deployment(args).run()
+            return True, out.getvalue()
+        except (deploy.DeployError, OSError, ValueError, KeyError, TypeError) as error:
+            return False, out.getvalue()+str(error)
 
-    def test_default_bumps_only_version_and_keeps_untracked_work_out_of_release(self):
-        (self.repo / 'scratch.txt').write_text('not part of release')
-        self.assert_ok(self.deploy())
-        self.assertIn('0.19.6', (self.repo / 'Cargo.toml').read_text())
-        self.assertEqual(self.git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').splitlines(), ['Cargo.lock', 'Cargo.toml'])
-        sha = self.git('rev-parse', 'HEAD')
-        self.assertEqual(self.git('ls-remote', 'origin', 'refs/heads/my-custom-release').split()[0], sha)
-        self.assertEqual(self.git('branch', '--show-current'), 'my-custom')
-        self.assertFalse(self.published.exists())
-        self.assertTrue((self.repo / 'scratch.txt').exists())
+    def ok(self, *args, **kwargs):
+        success, message = self.run_deploy(*args, **kwargs)
+        self.assertTrue(success, message)
+        return message
 
-    def test_explicit_version_and_final_confirmation_publish(self):
-        self.assert_ok(self.deploy('0.20.0', answer='y\n'))
-        self.assertEqual(self.published.read_text(), 'gridcraft-v0.20.0')
+    def release(self):
+        return json.loads((self.gh/'release.json').read_text())
 
-    def test_draft_flag_never_publishes_even_with_yes_input(self):
-        self.assert_ok(self.deploy('--draft', answer='y\n'))
-        self.assertFalse(self.published.exists())
+    def change_release(self, **fields):
+        r=self.release(); r.update(fields); (self.gh/'release.json').write_text(json.dumps(r))
 
-    def test_dry_run_does_not_write_or_contact_github(self):
-        before = self.git('status', '--porcelain')
-        self.assert_ok(self.deploy('--dry-run'))
-        self.assertEqual(self.git('rev-parse', 'HEAD'), self.initial)
-        self.assertEqual(self.git('status', '--porcelain'), before)
-        self.assertFalse(self.calls.exists())
-        self.assertIn('0.19.5', (self.repo / 'Cargo.toml').read_text())
+    def calls(self):
+        return [json.loads(line) for line in (self.gh/'calls').read_text().splitlines()]
 
-    def test_dirty_source_and_staged_changes_stop_before_version_update(self):
-        for staged in [False, True]:
-            with self.subTest(staged=staged):
-                (self.repo / 'source.rs').write_text('// unfinished work\n')
-                if staged:
-                    self.git('add', 'source.rs')
-                self.assertNotEqual(self.deploy().returncode, 0)
-                self.assertEqual(self.git('rev-parse', 'HEAD'), self.initial)
-                self.assertIn('0.19.5', (self.repo / 'Cargo.toml').read_text())
+    def test_two_os_upload_same_version_then_finalize_without_actions(self):
+        self.ok('macos',draft=True)
+        self.assertEqual(len(self.release()['assets']),3)
+        self.assertFalse((self.gh/'published').exists())
+        self.ok('windows',draft=True)
+        self.assertEqual(len(self.release()['assets']),6)
+        self.assertEqual(self.git('rev-parse','HEAD'),self.sha)
+        self.ok('macos',finalize=True,key=True,answer='y')
+        self.assertEqual(len(self.release()['assets']),9)
+        self.assertTrue((self.gh/'published').exists())
+        self.assertEqual(self.builds,['macos','windows'])
+        self.assertFalse(any(c[0] in ['workflow','run'] for c in self.calls()))
+        self.assertEqual(self.git('ls-remote','origin','refs/heads/my-custom-release'),'')
 
-    def test_wrong_branch_and_remote_are_rejected(self):
-        self.git('switch', '-c', 'main')
-        self.assertNotEqual(self.deploy().returncode, 0)
-        self.git('switch', 'my-custom')
-        self.git('remote', 'set-url', 'origin', 'https://github.com/storytold/gridcraft.git')
-        self.assertNotEqual(self.deploy().returncode, 0)
-        self.assertEqual(self.git('rev-parse', 'HEAD'), self.initial)
+    def test_windows_can_upload_first_and_mac_can_finish(self):
+        self.ok('windows',draft=True)
+        self.ok('macos',key=True,answer='y')
+        self.assertTrue((self.gh/'published').exists())
 
-    def test_published_version_network_error_and_older_version_do_not_mutate(self):
-        for state, args in [({'releases': [{'tag_name': 'gridcraft-v0.19.6', 'draft': False, 'prerelease': False}]}, []),
-                            ({'api_failure': True}, []), ({}, ['0.19.4'])]:
-            with self.subTest(state=state, args=args):
-                self.settings(**state)
-                self.assertNotEqual(self.deploy(*args).returncode, 0)
-                self.assertEqual(self.git('rev-parse', 'HEAD'), self.initial)
+    def test_complete_upload_without_key_stays_draft(self):
+        self.ok('macos',draft=True); self.ok('windows')
+        self.assertEqual(len(self.release()['assets']),6)
+        self.assertFalse((self.gh/'published').exists())
 
-    def test_failed_build_incorrect_source_and_missing_assets_cannot_publish(self):
-        for state in [{'build_failure': True}, {'run_sha': 'a'*40}, {'draft_sha': 'b'*40}, {'missing_asset': True}]:
-            with self.subTest(state=state):
-                self.settings(**state)
-                self.assertNotEqual(self.deploy('0.19.6', answer='y\n').returncode, 0)
-                self.assertFalse(self.published.exists())
+    def test_current_published_version_bumps_once_and_other_os_reuses_it(self):
+        self.settings(releases=[dict(tag_name='gridcraft-v0.19.7',draft=False,prerelease=False)])
+        self.ok('macos',draft=True); self.ok('windows',draft=True)
+        self.assertIn('0.19.8',(self.repo/'Cargo.toml').read_text())
+        self.assertEqual(self.git('rev-list','--count','HEAD'),'2')
+        self.assertEqual(self.release()['tagName'],'gridcraft-v0.19.8')
 
-    def test_retry_same_version_does_not_create_another_version_commit(self):
-        self.settings(build_failure=True)
-        self.assertNotEqual(self.deploy('0.19.6').returncode, 0)
-        committed = self.git('rev-parse', 'HEAD')
-        self.settings()
-        self.assert_ok(self.deploy('0.19.6', '--draft'))
-        self.assertEqual(self.git('rev-parse', 'HEAD'), committed)
+    def test_explicit_published_version_is_rejected_before_build(self):
+        self.settings(releases=[dict(tag_name='gridcraft-v0.19.7',draft=False,prerelease=False)])
+        self.assertFalse(self.run_deploy(version='0.19.7')[0]); self.assertEqual(self.builds,[])
 
-    def test_existing_tag_pointing_elsewhere_is_not_published(self):
-        self.git('tag', 'gridcraft-v0.19.6', self.initial)
-        self.git('push', 'origin', 'refs/tags/gridcraft-v0.19.6')
-        self.assertNotEqual(self.deploy('0.19.6', answer='y\n').returncode, 0)
-        self.assertFalse(self.published.exists())
+    def test_dry_run_has_no_writes_network_or_build(self):
+        before=self.git('status','--porcelain')
+        self.ok(dry_run=True)
+        self.assertFalse((self.gh/'calls').exists()); self.assertEqual(self.builds,[])
+        self.assertEqual(self.git('status','--porcelain'),before)
+        self.assertEqual(self.git('rev-parse','HEAD'),self.sha)
 
-    def test_retry_after_a_failed_run_tracks_a_new_manual_run(self):
-        self.assert_ok(self.deploy('0.19.6', '--draft'))
-        self.settings(failed_run=True)
-        self.assert_ok(self.deploy('0.19.6', '--draft'))
-        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertTrue(any(call[:2] == ['workflow', 'run'] for call in calls))
-        self.assertTrue(any(call[:3] == ['run', 'watch', '124'] for call in calls))
+    def test_dirty_source_and_wrong_remote_stop_before_network(self):
+        (self.repo/'source.rs').write_text('// unfinished')
+        self.assertFalse(self.run_deploy()[0]); self.assertFalse((self.gh/'calls').exists())
+        self.git('restore','source.rs'); self.git('remote','set-url','origin','https://github.com/storytold/gridcraft.git')
+        self.assertFalse(self.run_deploy()[0]); self.assertFalse((self.gh/'calls').exists())
 
-    def test_missing_push_run_requests_same_source_once_and_finishes_draft(self):
-        self.settings(push_run_missing=True)
-        self.assert_ok(self.deploy('0.19.6', '--draft', fast_clock=True))
-        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        dispatches = [call for call in calls if call[:2] == ['workflow', 'run']]
-        self.assertEqual(dispatches, [['workflow', 'run', 'release-custom.yml', '--ref', 'my-custom-release', '--repo', 'JeongEEE/gridcraft']])
-        self.assertTrue(any(call[:3] == ['run', 'watch', '124'] for call in calls))
-        self.assertEqual(self.git('rev-list', '--count', 'HEAD'), '2')
-        self.assertFalse(self.published.exists())
+    def test_api_failure_does_not_build_or_mutate_version(self):
+        self.settings(api_failure=True)
+        self.assertFalse(self.run_deploy()[0]); self.assertEqual(self.builds,[])
+        self.assertEqual(self.git('rev-parse','HEAD'),self.sha)
 
-    def test_delayed_push_run_is_followed_without_manual_dispatch(self):
-        self.settings(push_run_delayed_polls=2)
-        self.assert_ok(self.deploy('0.19.6', '--draft', fast_clock=True))
-        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertFalse(any(call[:2] == ['workflow', 'run'] for call in calls))
-        self.assertTrue(any(call[:3] == ['run', 'watch', '123'] for call in calls))
+    def test_other_source_draft_cannot_receive_upload(self):
+        self.ok(draft=True); self.change_release(targetCommitish='a'*40)
+        self.assertFalse(self.run_deploy('windows')[0]); self.assertEqual(len(self.release()['assets']),3)
 
-    def test_missing_manual_run_stops_with_source_and_actions_link(self):
-        self.settings(push_run_missing=True, manual_run_missing=True)
-        result = self.deploy('0.19.6', answer='y\n', fast_clock=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('대상 소스: ' + self.git('rev-parse', 'HEAD'), result.stderr)
-        self.assertIn('https://github.com/JeongEEE/gridcraft/actions/workflows/release-custom.yml', result.stderr)
-        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertEqual(sum(call[:2] == ['workflow', 'run'] for call in calls), 1)
-        self.assertFalse(self.published.exists())
+    def test_source_edit_during_build_prevents_upload(self):
+        self.during_build=lambda: (self.repo/'source.rs').write_text('// concurrent edit')
+        self.assertFalse(self.run_deploy()[0])
+        self.assertFalse(any(c[:2]==['release','upload'] for c in self.calls()))
 
-    def test_changed_release_ref_cannot_dispatch_another_source(self):
-        self.settings(push_run_missing=True, release_ref_changed=True)
-        result = self.deploy('0.19.6', '--draft', fast_clock=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('배포 브랜치', result.stderr)
-        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertFalse(any(call[:2] == ['workflow', 'run'] for call in calls))
-        self.assertFalse(self.published.exists())
+    def test_build_uses_committed_source_without_untracked_work(self):
+        import local_build
+        (self.repo/'scratch.rs').write_text('// untracked work')
+        args=argparse.Namespace(platform='macos',version=None,finalize=False,draft=True,dry_run=False,key_file=None)
+        with patch.object(deploy,'ROOT',self.repo):
+            deployment=deploy.Deployment(args)
+        deployment.sha=self.sha; deployment.version='0.19.7'
+        def inspect_source(d, output, source):
+            self.assertFalse((source/'scratch.rs').exists())
+            self.assertEqual((source/'source.rs').read_text(),'// committed source\n')
+            return ['verified']
+        with tempfile.TemporaryDirectory() as folder, patch('local_build.prepare_fonts'), patch('local_build.build_source',side_effect=inspect_source):
+            self.assertEqual(local_build.build(deployment,Path(folder)),['verified'])
 
-    def test_remote_release_ahead_of_source_stops_before_version_mutation(self):
-        self.git('switch', '-c', 'release-ahead')
-        (self.repo / 'source.rs').write_text('// release-only change\n')
-        self.git('add', 'source.rs')
-        self.git('commit', '-m', 'release ahead')
-        self.git('push', 'origin', 'HEAD:refs/heads/my-custom-release')
-        self.git('switch', 'my-custom')
-        self.assertNotEqual(self.deploy().returncode, 0)
-        self.assertEqual(self.git('rev-parse', 'HEAD'), self.initial)
-        self.assertIn('0.19.5', (self.repo / 'Cargo.toml').read_text())
+    def test_release_asset_change_during_confirmation_blocks_publication(self):
+        self.ok('macos',draft=True); self.ok('windows',draft=True)
+        def replace_asset(message):
+            r=self.release(); r['assets'][0]['id']='new upload'; self.change_release(assets=r['assets'])
+            return 'y'
+        args=argparse.Namespace(platform='macos',version=None,finalize=True,draft=False,dry_run=False,key_file=str(self.key))
+        with patch.object(deploy,'ROOT',self.repo), patch('builtins.input',side_effect=replace_asset):
+            with self.assertRaises(deploy.DeployError): deploy.Deployment(args).run()
+        self.assertFalse((self.gh/'published').exists())
 
-    def test_noninteractive_eof_keeps_the_validated_draft(self):
-        self.assert_ok(self.deploy(answer=''))
-        self.assertFalse(self.published.exists())
+    def test_missing_platform_prevents_finalize(self):
+        self.ok(draft=True)
+        self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+        self.assertFalse((self.gh/'published').exists())
 
-    def test_source_edit_during_network_preflight_stops_before_version_mutation(self):
-        self.settings(edit_during_preflight=True)
-        self.assertNotEqual(self.deploy().returncode, 0)
-        self.assertEqual(self.git('rev-parse', 'HEAD'), self.initial)
-        self.assertIn('0.19.5', (self.repo / 'Cargo.toml').read_text())
-        self.assertIn('concurrent unfinished edit', (self.repo / 'source.rs').read_text())
+    def test_tampered_payload_or_receipt_cannot_be_signed_or_published(self):
+        self.ok('macos',draft=True); self.ok('windows',draft=True)
+        f=self.gh/'assets/grid-0.19.7-windows-x64.msi'; original=f.read_bytes(); f.write_bytes(b'tampered')
+        self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+        f.write_bytes(original)
+        receipt=self.gh/'assets/grid-0.19.7-windows-build.json'
+        data=json.loads(receipt.read_text()); data['source']='b'*40; receipt.write_text(json.dumps(data))
+        self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+        self.assertFalse((self.gh/'published').exists())
 
-    def test_concurrent_commit_after_version_commit_is_not_silently_released(self):
-        real_git = shutil.which('git')
-        wrapper = self.bin / 'git'
-        wrapper.write_text('#!' + sys.executable + '\n' + f'''
-import pathlib, subprocess, sys
-args = sys.argv[1:]
-real = {real_git!r}
-result = subprocess.run([real, *args])
-if result.returncode == 0 and args and args[0] == 'commit' and '-m' in args and args[args.index('-m')+1].startswith('chore: Grid'):
-    pathlib.Path('source.rs').write_text('// concurrent commit after version preparation\\n')
-    subprocess.run([real, 'add', 'source.rs'], check=True)
-    subprocess.run([real, 'commit', '-m', 'concurrent source commit'], check=True)
-sys.exit(result.returncode)
-''')
-        wrapper.chmod(0o755)
-        self.assertNotEqual(self.deploy().returncode, 0)
-        self.assertEqual(self.git('ls-remote', 'origin', 'refs/heads/my-custom-release').split()[0], self.initial)
-        self.assertFalse(self.published.exists())
+    def test_existing_tag_with_wrong_commit_cannot_be_published(self):
+        self.ok('macos',draft=True); self.ok('windows',draft=True)
+        self.git('commit','--allow-empty','-m','other'); self.git('tag','gridcraft-v0.19.7'); self.git('push','origin','refs/tags/gridcraft-v0.19.7')
+        self.git('reset','--soft',self.sha)
+        self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+        self.assertFalse((self.gh/'published').exists())
+
+    def test_signer_uses_frozen_source_when_checkout_changes_after_key_read(self):
+        self.ok('macos',draft=True); self.ok('windows',draft=True)
+        read=Path.read_text
+        def changed_after_key(path, *args, **kwargs):
+            value=read(path,*args,**kwargs)
+            if path == self.key: (self.repo/'source.rs').write_text('// changed after private key read')
+            return value
+        with patch.object(Path,'read_text',changed_after_key):
+            self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+        self.assertEqual((self.gh/'sign-source').read_text(),'// committed source\n')
+        self.assertFalse((self.gh/'published').exists())
+
+    def test_sign_failure_keeps_draft_unpublished(self):
+        self.ok('macos',draft=True); self.ok('windows',draft=True); self.settings(sign_failure=True)
+        self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+        self.assertFalse((self.gh/'published').exists())
+
+    def test_eof_keeps_signed_draft_unpublished(self):
+        self.ok('macos',draft=True); self.ok('windows',draft=True)
+        self.ok(finalize=True,key=True,answer=None)
+        self.assertEqual(len(self.release()['assets']),9)
+        self.assertFalse((self.gh/'published').exists())
+
+    def test_no_confirmation_keeps_signed_draft(self):
+        self.ok('macos',draft=True); self.ok('windows',draft=True)
+        self.ok(finalize=True,key=True,answer='')
+        self.assertEqual(len(self.release()['assets']),9)
+        self.assertFalse((self.gh/'published').exists())
 
 
-if __name__ == '__main__':
-    unittest.main()
+if __name__=='__main__': unittest.main()

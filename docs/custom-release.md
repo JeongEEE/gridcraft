@@ -12,7 +12,7 @@ Grid는 `JeongEEE/gridcraft`에서 관리하는 GridCraft 기반 개인 스프�
 | `origin` | `https://github.com/JeongEEE/gridcraft.git` |
 | `main` | 개인 커밋 없이 `upstream/main`만 동기화 |
 | `my-custom` | 개인 변경 개발·검증·커밋 |
-| `my-custom-release` | 검증한 개발 버전을 배포하는 브랜치 |
+| `my-custom-release` | 과거 Actions 배포 기준선(로컬 배포에서는 갱신하지 않음) |
 
 업스트림을 반영하는 순서는 다음과 같다. 충돌은 `my-custom`에서 해결한다.
 
@@ -49,7 +49,7 @@ Command Line Tools를 가리키지만 Xcode가 설치돼 있다면, 전역 설�
 빌드 명령에 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`를 지정할 수 있다.
 Rust가 PATH에 없다면 먼저 `. "$HOME/.cargo/env"`를 실행한다.
 
-릴리스 workflow는 원본과 같은 `storytold/craft-fonts`의 고정 커밋
+로컬 릴리스는 원본과 같은 `storytold/craft-fonts`의 고정 커밋
 `b076417b5880bd4154bd22f00695b1d28c6bea83`을 별도 체크아웃해 글꼴과 OFL 고지를 동봉한다.
 다국어 UI 테스트도 이 글꼴 입력을 사용해야 한다. 로컬에서는 해당 체크아웃의 절대 경로를
 `CRAFT_FONTS_DIR`로 지정하고 `CRAFT_FONTS_REQUIRED=1`로 누락을 검사한다.
@@ -92,39 +92,98 @@ Esc 취소와 시트 보호도 함께 검사한다. `ime_cell_entry`는 조합·
 등록하고 기존 기본 앱은 바꾸지 않는다. 설정을 원본에서 자동으로 복사하거나 삭제하지 않는다.
 Windows UpgradeCode와 이미 배포한 component GUID는 이후 릴리스에서도 유지한다.
 
-## 한 명령으로 배포
+## OS별 로컬 배포
 
-macOS/Linux에서 저장소 루트의 `./deploy.sh`를 실행한다. Python 3.11 이상, git,
-Rust/Cargo, GitHub CLI(`gh`)와 `gh auth login`으로 로그인한 포크 쓰기 권한이 필요하다.
-Mac에 Xcode가 있으면 별도 `DEVELOPER_DIR` 설정 없이 버전 도구를 실행할 수 있다.
-Windows/macOS 설치 파일은 기존 GitHub Actions에서 빌드하므로 로컬에 Windows 빌드 환경은 필요 없다.
+빌드는 각자의 Mac/Windows에서 실행하고 GitHub에는 완성된 파일만 업로드한다.
+Actions 실행·runner·배포 브랜치 푸시는 사용하지 않는다. 기존 `deploy.sh`는 Mac 명령의 별칭이다.
+두 컴퓨터 모두 `my-custom`의 **같은 커밋과 버전**을 사용해야 한다. 한 릴리스를 마무리하기
+전에는 소스 변경을 추가하지 않고 두 컴퓨터에서 배포 명령을 동시에 실행하지 않는다.
+
+### 최초 환경 준비
+
+공통: Python 3.11 이상, git, Rust 1.95.0 이상, GitHub CLI(`gh`)와 포크 쓰기 권한으로
+`gh auth login`이 필요하다. 의존성 설치는 자동으로 시스템 설정을 변경하지 않도록 별도로 한다.
+
+Mac: Xcode와 두 Rust target을 준비한다. Xcode가 있으면 스크립트가 `DEVELOPER_DIR`를 설정한다.
 
 ```sh
-./deploy.sh                  # 다음 패치 버전 준비 → 빌드 대기 → 마지막 공개 확인
-./deploy.sh 0.19.6           # 버전을 직접 지정하거나 중단한 동일 버전 이어서 진행
-./deploy.sh --dry-run        # 파일·커밋·원격 변경 및 네트워크 요청 없이 절차 확인
-./deploy.sh --draft          # 빌드와 초안 확인까지 진행하고 공개 질문 생략
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ```
 
-스크립트는 `my-custom`의 커밋된 소스만 사용한다. 스테이징이나 추적 파일의 미완성 변경이
-있으면 중단하고, 미추적 파일은 그대로 두며 포함하지 않는다. 버전 변경은 `Cargo.toml`과
-`Cargo.lock`만 커밋한다. 개발 브랜치와 배포 브랜치의 원격 변경이 소스에 반영되지 않았다면
-자동 병합하지 않는다. 현재 작업 브랜치를 바꾸지 않고 확정한 소스 SHA를 배포 브랜치에
-fast-forward로 푸시하므로 실행 중 다른 브랜치로 이동하는 과정이 없다.
+Windows: PowerShell 7(`pwsh`), Visual Studio Build Tools의 **Desktop development with C++**
+(MSVC x64, Windows SDK), .NET SDK와 WiX 5.0.2를 준비한다. **Developer PowerShell for VS**에서
+실행하면 SDK의 `rc.exe` 등 도구 경로가 잡힌다. PowerShell 실행 정책이 차단하면 해당 터미널에서만
+`Set-ExecutionPolicy -Scope Process Bypass`를 사용한다.
 
-터미널에서 정확한 SHA의 Actions 진행 상태를 보여 준다. 푸시 후 30초 동안 해당 실행이
-나타나지 않으면 배포 브랜치가 여전히 같은 SHA인지 확인하고 `workflow_dispatch`를 한 번
-요청한다. 요청 후 최대 120초 동안 실행 생성을 기다리며, 생성되지 않으면 대상 SHA와
-Actions 링크를 표시하고 중단한다. 이미 나타난 실행은 그대로 따라간다. 두 OS와 draft 작업의 성공,
-초안의 소스 커밋·태그 및 필수 자산 7개가 모두 맞아야 공개 질문으로 진행한다.
-마지막 질문에서 `y`를 입력해야 실제 공개와 자동 업데이트 배포가 시작된다. `n`·Enter·입력
-종료는 초안을 유지한다. 중간 실패나 로컬 대기 취소가 원격 빌드를 자동 취소하지는 않으며,
-표시된 동일 버전 명령으로 다시 실행하면 진행 중/성공한 빌드를 이어 확인하거나 실패한
-빌드를 새로 실행한다. 버전 준비 도중 실패해 미커밋 변경이 남았다면 먼저 그 변경을 확인한다.
-공개된 버전을 덮어쓰거나 태그·브랜치를 강제로 되돌리지 않는다.
+```powershell
+rustup target add x86_64-pc-windows-msvc
+dotnet tool install --global wix --version 5.0.2
+gh auth login
+git clone --branch my-custom https://github.com/JeongEEE/gridcraft.git
+cd gridcraft
+```
 
-오케스트레이터 회귀 테스트는 `python3 packaging/test_deploy.py`로 실행한다. 임시 git
-저장소와 통제된 CLI 응답만 사용하며 실제 포크 배포는 실행하지 않는다.
+글꼴은 기존 릴리스와 같은 `b076417b5880bd4154bd22f00695b1d28c6bea83`을 로컬 git
+공통 디렉터리의 캐시에 받는다. `CRAFT_FONTS_DIR`를 지정했다면 그 경로도 같은 고정 커밋의
+깨끗한 체크아웃이어야 한다. 첫 빌드는 오래 걸리고 이후에는 로컬 Cargo target 캐시를 재사용한다.
+
+### 두 컴퓨터에서 실행
+
+현재 미공개 준비 버전인 `0.19.7`을 이어 배포하는 예다. 어느 OS부터 실행해도 된다.
+
+```sh
+# Mac: 커밋된 소스 확인 후 로컬 빌드·검증·초안 업로드
+./deploy-macos.sh 0.19.7 --draft
+```
+
+```powershell
+# Windows: Mac에서 버전 커밋이 생겼다면 먼저 pull
+git switch my-custom
+git pull --ff-only origin my-custom
+.\deploy-windows.ps1 -Version 0.19.7 -Draft
+```
+
+버전을 생략하면 **현재 소스가 미공개 버전일 때 그대로 사용**한다. 이미 공개된 버전이라면
+첫 PC에서만 다음 패치를 준비하고 `Cargo.toml`·`Cargo.lock`을 커밋·푸시한다. 두 번째 PC는
+그 커밋을 pull한 뒤 같은 버전을 사용한다. 명시한 공개 버전·낮은 버전은 거부한다.
+
+각 PC는 자기 OS의 두 패키지와 빌드 증빙 JSON만 같은 초안에 올린다. 빌드는 미추적 파일을
+제외한 확정 커밋의 임시 로컬 clone에서 수행한다. 긴 빌드 중 원래 체크아웃이 바뀌면
+업로드를 중단한다. 다른 SHA의 초안을 재지정하거나 이미 공개된 파일을 덮어쓰지 않는다.
+
+Windows PC에는 업데이트 개인키가 없어도 된다. 두 OS가 모이면 키가 있는 Mac에서
+빌드 없이 검증·서명·공개 확인을 마무리한다.
+
+```sh
+./deploy-macos.sh 0.19.7 --finalize
+```
+
+기존 키 기본 경로는 `~/Dev/keystores/grid/update-private-key.hex`다. 다른 위치는
+`GRID_UPDATE_KEY_FILE` 또는 `--key-file <경로>`로 지정한다. Windows는 `-KeyFile <경로>`와
+`-Finalize`를 쓴다. 새 키를 생성하거나 소스·GitHub 자산에 개인키를 올리지 않는다.
+키는 Rust 서명기 자식 프로세스의 환경에만 전달한다. 기존 앱의 고정 공개키와 일치해야 서명된다.
+
+두 플랫폼을 내려받아 증빙의 버전·SHA·글꼴·검증 기록·파일 해시를 확인하고, 기존
+`GridUpdate.json`·`GridUpdate.sig`와 체크섬을 만든다. 업로드한 최종 9개 자산의 바이트도
+다시 확인한 뒤 마지막 질문에 `y`를 입력해야 공개된다. `n`·Enter·EOF는 초안을 유지한다.
+`--draft`/`-Draft`는 질문 없이 초안을 유지한다. 키가 있는 PC에서 두 번째 OS 빌드를
+했다면 `--finalize`를 따로 실행하지 않고 바로 이 단계로 이어갈 수도 있다.
+
+`--dry-run`/`-DryRun`은 네트워크·파일·커밋을 변경하지 않고 예정된 동작을 보여 준다.
+기존 `./deploy.sh`도 동일한 Mac 로컬 흐름이며 Actions로 돌아가는 옵션은 없다.
+실패하면 같은 버전으로 재실행한다. 버전 준비 중 미커밋 파일이 남았다면 먼저 확인한다.
+초안의 소스를 바꿔야 한다면 새 버전을 준비하며 기존 초안을 임의로 다른 SHA에 연결하지 않는다.
+
+### 로컬 검증 범위
+
+양쪽 모두 fork identity, updater 테스트, CLI 계산·XLSX 저장·재열기를 검사한다. Mac은
+완성된 DMG의 서명과 임시 앱 교체·실패 시 복원을 확인한다. Windows는 MSI 정적 설치 정책과
+임시 폴더의 포터블 업데이트·복원을 검사한다. **개인 PC의 기존 Grid를 설치·제거하지 않는다.**
+실제 MSI 설치·업그레이드 회귀는 깨끗한 일회용 Windows 환경에서만 기존
+`packaging/windows/test-auto-update.ps1`로 별도 실행한다. 정적 검증과 실제 설치 검증을 혼동하지 않는다.
+
+배포 오케스트레이터 회귀 테스트는 `python3 packaging/test_deploy.py`다. 임시 git
+원격과 통제된 GitHub/컴파일러 경계를 사용하며 실제 배포·공개를 수행하지 않는다.
 
 ## 버전과 릴리스
 
@@ -142,7 +201,7 @@ Actions 링크를 표시하고 중단한다. 이미 나타난 실행은 그대�
 배포 차단 조건에서 제외한다. 테스트 자체는 유지하며 다른 실패를 함께 제외하지 않는다.
 
 버전의 정본은 `Cargo.toml`의 `[workspace.package].version`이다. 첫 포크 버전은 `0.19.2`다.
-다음 버전은 `cargo run -p xtask --no-default-features -- version set 0.19.5`으로 변경하고
+다음 버전은 `cargo run -p xtask --no-default-features -- version set 0.19.8`으로 변경하고
 `Cargo.toml`과 `Cargo.lock`을 함께 커밋한다. 업스트림 병합 시 버전 충돌은 포크 버전을
 유지하는 방향으로 해결하되, 다음 배포 번호는 이미 공개한 번호보다 높아야 한다.
 
@@ -150,27 +209,21 @@ Actions 링크를 표시하고 중단한다. 이미 나타난 실행은 그대�
 기존 updater가 저장소 이름 접두사가 붙은 버전을 해석한다. 저장소 이름 변경은 이 규약과
 업데이트 주소를 함께 바꾸는 별도 작업이다.
 
-배포 준비가 끝나면 `my-custom-release`에 개발 브랜치를 반영하고 푸시한다.
-최초 한 번만 `git switch -c my-custom-release my-custom`으로 배포 브랜치를 만든다.
-
-```sh
-git switch my-custom-release
-git merge --ff-only my-custom
-git push origin my-custom-release
-git switch my-custom
-```
-
-`.github/workflows/release-custom.yml`은 이 포크의 배포 브랜치에서만 실행된다.
-macOS와 Windows 빌드가 모두 성공해야 네 패키지와 체크섬·서명된 업데이트 목록을 갖춘 draft를 만든다.
+릴리스 초안은 위 OS별 스크립트가 `my-custom`의 확정 SHA로 생성한다.
+`my-custom-release`는 과거 배포 기준선으로만 남겨 두며 새 배포에서는 푸시하지 않는다.
+포크 전용 `release-custom.yml`은 제거했다. upstream workflow는 동기화용으로 유지하며
+이 로컬 배포 경로는 해당 workflow를 호출하거나 그 트리거 브랜치에 푸시하지 않는다.
 
 - `grid-<버전>-macos-universal.dmg`: Apple Silicon·Intel용 Grid.app.
 - `grid-cli-<버전>-macos-universal.zip`: macOS CLI.
 - `grid-<버전>-windows-x64.msi`: Windows 설치 프로그램.
 - `grid-<버전>-windows-x64-portable.zip`: 설치 없이 실행하는 Windows 파일.
+- `grid-<버전>-macos-build.json`, `grid-<버전>-windows-build.json`: 소스·검증·파일 해시 증빙.
+- `GridUpdate.json`, `GridUpdate.sig`, `SHA256SUMS.txt`: 기존 키로 서명한 업데이트 목록과 체크섬.
 
-draft는 저장소 협업자만 볼 수 있다. 실제 산출물과 검증 결과를 확인하고 사용자 승인 후
-GitHub Releases에서 발행한다. 이미 공개한 버전을 덮어쓰지 않는다. draft 재실행은 같은
-버전의 산출물과 대상 커밋을 갱신한다. 원본 전체 플랫폼 릴리스 workflow는 이 포크에서 사용하지 않는다.
+draft는 저장소 협업자만 볼 수 있다. 두 OS가 다 갖춰지기 전에는 초안을 공개하지 않는다.
+현재 로컬 경로는 기존 7개 자산에 증빙 2개가 추가된 총 9개다. updater의 서명 규약과
+앱 식별자는 유지하며 공개된 버전은 덮어쓰지 않는다.
 
 ## 자동 업데이트
 
@@ -233,8 +286,8 @@ DMG에서 직접 실행하거나 App Translocation·패키지 관리자·개발 
 원본 craft-update 설치기의 제작사 검증은 변경하지 않고 독립된 포크 인증 경로를 사용한다.
 
 **도입 상태:** 운영 Ed25519 키를 생성해 공개키를 소스에 고정하고 개인키를
-`GRID_UPDATE_PRIVATE_KEY` Actions secret에 등록했다. 서명된 패키지의 CI 검증과 초안
-갱신은 별도 단계다. 키 설정만으로 이전 draft의 설치 파일이 바뀌지는 않는다.
+과거 Actions secret에도 등록했다. 현재 배포는 저장소 밖의 기존 키 파일을 로컬 서명기에만
+전달한다. 과거 secret을 새로 등록하거나 읽어 올 필요는 없다. 키 설정만으로 초안의 파일은 바뀌지 않는다.
 
 개인키 정본은 저장소 밖 `~/Dev/keystores/grid/update-private-key.hex`에 보관한다.
 디렉터리 권한은 `700`, 개인키 권한은 `600`으로 제한한다. 저장소를 지우거나 다시 클론해도
@@ -250,11 +303,9 @@ cargo run --locked -p gridcraft-update --bin grid-update-sign -- keygen \
   "$HOME/Dev/keystores/grid/update-private-key.hex" \
   "$HOME/Dev/keystores/grid/update-public-key.hex"
 cp "$HOME/Dev/keystores/grid/update-public-key.hex" crates/update/public-key.hex
-gh secret set GRID_UPDATE_PRIVATE_KEY --repo JeongEEE/gridcraft \
-  < "$HOME/Dev/keystores/grid/update-private-key.hex"
 ```
 
-공개키는 앱 빌드 **이전**에 커밋하고 signing secret과 일치하는지 확인한다. 배포 workflow는
+공개키는 앱 빌드 **이전**에 커밋하고 로컬 키와 일치하는지 확인한다. 로컬 배포 도구는
 모든 패키지를 만든 뒤 전용 도구로 manifest를 서명한다. 개발 테스트용 결정적 키를
 운영 키로 쓰지 않는다. 공개키를 환경변수로 덮어쓰는 런타임 우회는 제공하지 않는다.
 
