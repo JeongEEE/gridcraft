@@ -1,7 +1,7 @@
 //! Use MSI for registered copies; never unpack a portable ZIP over an MSI installation.
 use super::{
     helper, install,
-    target::{Target, is_own_msi_product, msi_folder_argument},
+    target::{Target, is_own_msi_product, msi_folder_argument, msi_plain_path},
 };
 use craft_update::msi_context::{self, MsiScope};
 use std::path::{Path, PathBuf};
@@ -132,29 +132,45 @@ pub(crate) fn install(package: &Path, target: &Target, version: &str, work: &Pat
 }
 
 fn install_msi(package: &Path, machine: bool, folder: &Path, work: &Path) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
     let program = std::env::var_os("SystemRoot")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .ok_or("No Windows system directory.")?
         .join(r"System32\msiexec.exe");
+    let command = msi_command(program, package, machine, folder, work)?;
+    craft_update::process::run_command(command, "Grid MSI update", Duration::from_secs(10 * 60))?;
+    Ok(())
+}
+
+fn msi_command(program: PathBuf, package: &Path, machine: bool, folder: &Path, work: &Path) -> Result<std::process::Command, String> {
+    use std::os::windows::process::CommandExt;
     let mut command = craft_update::process::command(program);
+    // The helper's update folder is canonical (`\\?\`); every path msiexec sees must be plain.
     // This package runs FindRelatedProducts before costing normalizes ALLUSERS=2. Keep it
     // empty for per-user upgrades, or MSI can miss the old user product and register a second.
-    command.arg("/i").arg(package).arg(if machine { "/passive" } else { "/qn" }).arg("/norestart").arg("REBOOT=ReallySuppress");
+    command.arg("/i").arg(msi_plain_path(package)?).arg(if machine { "/passive" } else { "/qn" }).arg("/norestart").arg("REBOOT=ReallySuppress");
     if machine {
         command.arg("ALLUSERS=1");
     } else {
         command.raw_arg(r#"ALLUSERS="""#).arg("MSIINSTALLPERUSER=1");
     }
-    command.raw_arg(msi_folder_argument(folder)?).arg("/l*v").arg(work.join("msi-install.log"));
-    craft_update::process::run_command(command, "Grid MSI update", Duration::from_secs(10 * 60))?;
-    Ok(())
+    command.raw_arg(msi_folder_argument(folder)?).arg("/l*v").arg(msi_plain_path(&work.join("msi-install.log"))?);
+    Ok(command)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn msiexec_never_receives_a_verbatim_path_from_the_canonical_update_folder() {
+        let work = Path::new(r"\\?\C:\Users\사용자\AppData\Local\Grid\grid-updates\grid-update-abc");
+        let command =
+            msi_command("msiexec.exe".into(), &work.join("grid.msi"), true, Path::new(r"\\?\C:\Program Files\JeongEEE\Grid"), work).unwrap();
+        let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args[1], r"C:\Users\사용자\AppData\Local\Grid\grid-updates\grid-update-abc\grid.msi");
+        assert!(args.iter().all(|a| !a.contains(r"\\?\")), "{args:?}");
+    }
 
     #[test]
     #[ignore = "Requires packaged ZIP in GRID_UPDATE_SMOKE_PACKAGE"]

@@ -83,16 +83,22 @@ pub(crate) fn is_own_msi_product(name: &str, publisher: &str, product: &str) -> 
     name == super::APP.name && publisher == super::APP.developer && craft_update::msi_context::valid_product_code(product)
 }
 
+/// `canonicalize` yields `\\?\` paths on Windows. msiexec opens such a package, but the
+/// Installer service then rejects its source folder (log note 1314) and exits with 1619.
+#[cfg(any(windows, test))]
+pub(crate) fn msi_plain_path(path: &Path) -> Result<String, String> {
+    let path = path.to_str().ok_or("Windows Installer cannot represent this path.")?;
+    Ok(if let Some(unc) = path.strip_prefix(r"\\?\UNC\") { format!(r"\\{unc}") } else { path.strip_prefix(r"\\?\").unwrap_or(path).to_string() })
+}
+
 #[cfg(any(windows, test))]
 pub(crate) fn msi_folder_argument(folder: &Path) -> Result<String, String> {
-    let path = folder.to_str().ok_or("Windows Installer cannot represent this folder name.")?;
-    if path.chars().any(|c| c == '"' || c.is_control()) {
+    let value = msi_plain_path(folder)?;
+    if value.chars().any(|c| c == '"' || c.is_control()) {
         return Err("Invalid character in the MSI installation folder.".into());
     }
     // MSI parses property assignments itself: raw_arg must quote the value, not the whole
-    // PROPERTY=value token. Canonical Win32 paths also need their ordinary DOS/UNC form.
-    let value =
-        if let Some(unc) = path.strip_prefix(r"\\?\UNC\") { format!(r"\\{unc}") } else { path.strip_prefix(r"\\?\").unwrap_or(path).to_string() };
+    // PROPERTY=value token.
     Ok(format!("INSTALLFOLDER=\"{value}\""))
 }
 
