@@ -43,11 +43,19 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             // AppKit is handling when eframe applies the command after the frame, not the press,
             // and the winit fork keeps AppKit from moving the window by its title-bar band. So the
             // window follows the pointer: keep the pressed point under it. Only on frames with a
-            // new pointer position: after a move the last position is relative to where the window
-            // was, so reusing it would push the window on every repaint until release.
+            // pointer event: after a move the last position is relative to where the window was,
+            // so reusing it would push the window on every repaint until release. Not `delta()`:
+            // it is window-relative, so it reads zero when the window kept pace with the pointer.
+            // The press point is kept from the drag start because egui forgets it on release.
             // ponytail: no native snapping or Spaces drag; a winit drag that keeps the mouse-down event would give both.
-            if (bg.dragged() || bg.drag_stopped()) && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
-                let (outer, press, now) = ui.input(|i| (i.viewport().outer_rect, i.pointer.press_origin(), i.pointer.latest_pos()));
+            if bg.drag_started() {
+                let press = ui.input(|i| i.pointer.press_origin());
+                ui.data_mut(|d| d.insert_temp(bg.id, press));
+            }
+            let moved = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_))));
+            if (bg.dragged() || bg.drag_stopped()) && moved {
+                let press = ui.data(|d| d.get_temp::<Option<egui::Pos2>>(bg.id)).flatten();
+                let (outer, now) = ui.input(|i| (i.viewport().outer_rect, i.pointer.latest_pos()));
                 if let (Some(outer), Some(press), Some(now)) = (outer, press, now) {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::OuterPosition(outer.min + (now - press)));
                 }
