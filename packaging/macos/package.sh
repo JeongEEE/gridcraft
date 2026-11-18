@@ -147,7 +147,10 @@ STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/Grid.app"
 ln -s /Applications "$STAGE/Applications"
-# Use Finder defaults: the upstream custom layout names GridCraft.app.
+# Finder window: background, icon size and positions (packaging/macos/dmg/README.md).
+mkdir -p "$STAGE/.background"
+cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"
+cp "$HERE/dmg/dmg-layout.DS_Store" "$STAGE/.DS_Store"
 # The hybrid HFS writer adds Finder positions to every file, invalidating strict bundle
 # verification after mounting. A normal HFS+ image preserves the signed app's metadata.
 # Bound and retry creation: hdiutil can transiently report "Resource busy" on CI runners.
