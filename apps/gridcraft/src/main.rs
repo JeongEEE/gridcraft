@@ -62,6 +62,16 @@ impl eframe::App for App {
         self.1.show(&mut self.0, ui);
         gridcraft_update::helper::acknowledge_startup();
     }
+    /// Only the window's place is saved (`persist_window`); egui's own state starts fresh each run.
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+    /// eframe writes `window.ron` on a thread of its own, and the macOS quit below ends the process
+    /// without waiting for it, so the place is saved every second instead of only at quit. The file
+    /// is written only when the window moved or resized.
+    fn auto_save_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(1)
+    }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
         save_prefs(&self.0);
@@ -358,7 +368,17 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(i);
     }
     let window_builder = viewport.clone();
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    // The main window opens where it was last closed, on the same monitor and at the same size
+    // (eframe clamps a position left on a monitor that is gone). Saved in `window.ron` next to `ui.json`.
+    // Without preferences the path is empty: nothing is read, and with `persist_window` off nothing
+    // is written (eframe's default path would create a folder of its own).
+    let window_file = config_dir().filter(|_| prefs_enabled()).map(|d| d.join("window.ron"));
+    let options = eframe::NativeOptions {
+        viewport,
+        persist_window: window_file.is_some(),
+        persistence_path: Some(window_file.unwrap_or_default()),
+        ..Default::default()
+    };
     #[cfg(unix)]
     let mut options = options;
     // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (see graphics.rs).

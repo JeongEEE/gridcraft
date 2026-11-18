@@ -27,6 +27,18 @@ fn app_at(width: f32, tab: &str) -> Harness {
 }
 
 #[test]
+fn the_corner_button_collapses_and_expands_the_ribbon() {
+    let mut h = app_at(1440.0, "Data");
+    h.get_by_label("Collapse the Ribbon").click();
+    h.run_steps(3);
+    assert!(h.state().ui.ribbon_collapsed, "the button hides the card");
+    assert_eq!(h.state().ui.ribbon_tab, "Data", "the tab stays chosen");
+    h.get_by_label("Expand the Ribbon").click();
+    h.run_steps(3);
+    assert!(!h.state().ui.ribbon_collapsed, "and shows it again");
+}
+
+#[test]
 fn every_tab_fits_the_card_height() {
     // Columns of small buttons hold three rows; a fourth would be cut off at the card's bottom.
     for tab in TABS {

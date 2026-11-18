@@ -110,6 +110,21 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
                         }
                     }
+                    // Right end of the tabs row: hides the card or shows it again, as clicking the
+                    // active tab does.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (icon, name) = if collapsed { (Icon::Chevron, "Expand the Ribbon") } else { (Icon::ChevronUp, "Collapse the Ribbon") };
+                        let (r, resp) = ui.allocate_exact_size(vec2(28.0, 26.0), Sense::click());
+                        if resp.hovered() {
+                            ui.painter().rect_filled(r, 5.0, t.hover);
+                        }
+                        icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), icon, t.text_dim);
+                        let label = app.ui.language.tr(name);
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+                        if resp.on_hover_text(label).clicked() {
+                            app.ui.ribbon_collapsed = !collapsed;
+                        }
+                    });
                 });
             });
             if collapsed {

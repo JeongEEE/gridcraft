@@ -7,23 +7,26 @@ use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, icon
 /// vertically centred in it, with the controls beside them (#170).
 const MAC: bool = cfg!(target_os = "macos");
 
-pub const MAC_TITLE_BAR: f32 = 28.0;
+/// The band AppKit centres the traffic lights in. Measured on macOS 26 and later (lights centred
+/// about 16 pt from the top); earlier versions use 28 pt, where the controls sit 2 pt lower than
+/// the lights. ponytail: one layout for every macOS; read the lights' frame if older ones matter.
+pub const MAC_TITLE_BAR: f32 = 32.0;
 
-/// The traffic lights as AppKit lays them out: button diameter, centre-to-centre pitch and the
-/// first button's left edge (8–10 pt depending on the macOS version; the larger value keeps the
-/// gap after them from shrinking).
-const MAC_LIGHT: f32 = 12.0;
+/// The traffic lights as AppKit lays them out on macOS 26 and later: button diameter,
+/// centre-to-centre pitch and the first button's left edge (earlier versions: 12, 20 and 8–10 pt,
+/// which only widens the gap after them).
+const MAC_LIGHT: f32 = 14.0;
 
-const MAC_LIGHT_PITCH: f32 = 20.0;
+const MAC_LIGHT_PITCH: f32 = 23.0;
 
-const MAC_LIGHTS_LEFT: f32 = 10.0;
+const MAC_LIGHTS_LEFT: f32 = 9.0;
 
 /// Where title-bar content starts on macOS: the end of the three lights plus the gap the lights
 /// keep from the top of the window.
 pub const MAC_CONTENT_LEFT: f32 = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT + (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
 
 /// Leave room for the macOS traffic lights when the content extends into the title bar.
-pub const TITLE_LEFT_PAD: f32 = if MAC { MAC_CONTENT_LEFT } else { 8.0 };
+pub const TITLE_LEFT_PAD: f32 = if MAC { MAC_CONTENT_LEFT } else { 14.0 };
 
 pub(super) const TITLE_BAR_H: f32 = if MAC { MAC_TITLE_BAR } else { 38.0 };
 
