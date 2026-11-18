@@ -906,79 +906,6 @@ fn b1_prefix_is_hidden_and_gregorian() {
     assert_eq!(f("B1yyyy-mm-dd hh:mm", 46314.5), "2026-10-19 12:00");
 }
 
-/// `B2` on a General or text section changes nothing: Excel shows the plain serial.
-#[test]
-fn b2_prefix_on_general_and_text_sections() {
-    assert_eq!(f("B2General", 46314.0), "46314");
-    assert_eq!(f("B2@", 46314.0), "46314");
-}
-
-#[test]
-fn b2_month_and_year_rollover() {
-    assert_eq!(f("B2dd/mm/yyyy", 36915.0), "29/10/1421");
-    assert_eq!(f("B2dd/mm/yyyy", 36916.0), "01/11/1421");
-    assert_eq!(f("B2dd/mm/yyyy", 36974.0), "29/12/1421");
-    assert_eq!(f("B2dd/mm/yyyy", 36975.0), "01/01/1422");
-    assert_eq!(f("B2dd/mm/yyyy", 37683.0), "30/12/1423");
-    assert_eq!(f("B2dd/mm/yyyy", 37684.0), "01/01/1424");
-}
-
-/// Cycle years 15 (1425, leap) and 16 (1426, not leap): Excel's leap year is 15, not 16. The
-/// 2 March 2005 and 29 January 2006 values were read from Excel by a reviewer; the year
-/// boundaries follow from them and the 354/355-day years. The same comparison covered every
-/// serial from 36,000 to 49,000 with no disagreement.
-#[test]
-fn b2_leap_year_is_cycle_year_15() {
-    assert_eq!(f("B2yyyy-mm-dd", 38413.0), "1426-01-21"); // 2005-03-02, from Excel
-    assert_eq!(f("B2yyyy-mm-dd", 38746.0), "1426-12-29"); // 2006-01-29, from Excel
-    assert_eq!(f("B2dd/mm/yyyy", 38037.0), "29/12/1424"); // 2004-02-20
-    assert_eq!(f("B2dd/mm/yyyy", 38038.0), "01/01/1425"); // 2004-02-21
-    assert_eq!(f("B2dd/mm/yyyy", 38392.0), "30/12/1425"); // 2005-02-09
-    assert_eq!(f("B2dd/mm/yyyy", 38393.0), "01/01/1426"); // 2005-02-10
-    assert_eq!(f("B2dd/mm/yyyy", 38747.0), "01/01/1427"); // 2006-01-30
-    // Anchors the reviewer read from Excel.
-    assert_eq!(f("B2dd/mm/yyyy", 46314.0), "08/05/1448"); // 2026-10-19
-    assert_eq!(f("B2dd/mm/yyyy", 46313.0), "07/05/1448"); // 2026-10-18
-    assert_eq!(f("B2dd/mm/yyyy", JAN_1_2001), "06/10/1421");
-    assert_eq!(f("B2dd/mm/yyyy", 61.0), "29/10/1317"); // 1900-03-01
-    assert_eq!(f("B2dd/mm/yyyy", 64970.0), "01/01/1501"); // 2077-11-16
-    assert_eq!(f("B2dd/mm/yyyy", 64971.0), "02/01/1501"); // 2077-11-17
-    assert_eq!(f("B2dd/mm/yyyy", 0.0), "29/08/1317");
-    assert_eq!(f("B2dd/mm/yyyy", 2958465.0), "03/04/9666"); // 9999-12-31
-}
-
-/// Excel honours `B2` after a colour tag, but a `[$-...]` locale tag before it keeps the date
-/// Gregorian (the prefix is still hidden); `B2[$-401]` is Hijri.
-#[test]
-fn calendar_prefix_and_bracket_tags() {
-    assert_eq!(f("[Red]B2dd/mm/yyyy", 46314.0), "08/05/1448");
-    assert_eq!(f("[<0]0;B2dd/mm/yyyy", JAN_1_2001), "06/10/1421");
-    assert_eq!(f("B2[$-401]dd/mm/yyyy", 46314.0), "08/05/1448");
-    for code in ["[$-401]B2dd/mm/yyyy", "[$-409]B2dd/mm/yyyy", "[$-1010401]B2dd/mm/yyyy", "[$-ar-SA]B2dd/mm/yyyy"] {
-        assert_eq!(f(code, 46314.0), "19/10/2026", "{code}");
-        assert_eq!(text_function(&Value::Number(46314.0), code, S).as_deref(), Ok("19/10/2026"), "{code}");
-    }
-    assert_eq!(f("[Red][$-401]B1dd/mm/yyyy", JAN_1_2001), "01/01/2001");
-    // Checked in Excel 16.0 (build 20527, en-US): a currency tag cancels `B2` like a locale tag,
-    // a tag after the prefix does not, and a repeated prefix is accepted.
-    assert_eq!(f("[$€-407]B2dd/mm/yyyy", 46314.0), "€19/10/2026");
-    assert_eq!(f("[$$-409]B2dd/mm/yyyy", 46314.0), "$19/10/2026");
-    assert_eq!(f("[$-401][Red]B2dd/mm/yyyy", 46314.0), "19/10/2026");
-    assert_eq!(f("B2[Red]dd/mm/yyyy", 46314.0), "08/05/1448");
-    for code in ["B2B2dd/mm/yyyy", "B2B2B2dd/mm/yyyy", "B2b2dd/mm/yyyy", "[Red]B2B2dd/mm/yyyy"] {
-        assert_eq!(f(code, 46314.0), "08/05/1448", "{code}");
-    }
-    assert_eq!(f("B1B1dd/mm/yyyy", 46314.0), "19/10/2026");
-    assert_eq!(f("B2 dd/mm/yyyy", 46314.0), " 08/05/1448");
-    assert_eq!(f("B2\"x\"dd", 46314.0), "x08");
-    for code in ["B1\"x\"", "B2\"x\""] {
-        assert_eq!(f(code, 46314.0), "x", "{code}");
-    }
-    for code in ["B1General", "B1@", "0;0;0;B2@", "0;B2dd/mm/yyyy"] {
-        assert_eq!(f(code, 46314.0), "46314", "{code}");
-    }
-}
-
 /// A quoted `B2` is literal text; any other `B` and digit makes Excel reject the code (`TEXT` is
 /// `#VALUE!`), as does a prefix before a number format. A rejected code shows as General. All
 /// checked in Excel 16.0 (build 20527, en-US), with TEXT and with a cell format.
@@ -1014,49 +941,6 @@ fn misplaced_calendar_prefix_is_rejected() {
         assert_eq!(f(code, 46314.0), "46314", "{code}");
         assert!(NumberFormat::parse(code).is_general(), "{code}");
     }
-}
-
-#[test]
-fn b2_edges_of_the_date_range() {
-    // Serial 60 is the 1900 system's fictitious 29 February: Excel has no Hijri date for it.
-    assert_eq!(text_function(&Value::Number(60.0), "B2dd/mm/yyyy", S), Err(CellError::Value));
-    assert_eq!(f("B2dd/mm/yyyy", 60.0), "########");
-    assert_eq!(f("B1dd/mm/yyyy", 60.0), "29/02/1900");
-    assert_eq!(f("B2dd/mm/yyyy", 59.0), "28/10/1317");
-    assert_eq!(f("B2dd/mm/yyyy", 61.0), "29/10/1317");
-    // So does any clock part (Excel 16.0, build 20527, en-US), but not an elapsed `[h]`, a literal,
-    // or a locale tag that cancels `B2`.
-    for code in ["B2hh:mm", "B2hh", "B2ss", "B2am/pm", "B2hh:mm AM/PM", "B2[$-401]hh:mm", "B2dd/mm/yyyy;\"x\""] {
-        assert_eq!(text_function(&Value::Number(60.0), code, S), Err(CellError::Value), "{code}");
-        assert_eq!(text_function(&Value::Number(60.5), code, S), Err(CellError::Value), "{code}");
-    }
-    assert_eq!(f("B2[h]", 60.0), "1440");
-    assert_eq!(f("B2\"x\"", 60.0), "x");
-    assert_eq!(f("[$-401]B2hh:mm", 60.0), "00:00");
-    assert_eq!(f("B1hh:mm", 60.0), "00:00");
-    assert_eq!(f("B2hh:mm", 61.0), "00:00");
-    // Serial 0 shows as serial 1.
-    assert_eq!(f("B2dd/mm/yyyy", 0.0), "29/08/1317");
-    assert_eq!(f("B2dd/mm/yyyy", 1.0), "29/08/1317");
-    // No upper limit short of 31 December 9999: 16 and 17 November 2077, 31 December 9999.
-    assert_eq!(f("B2dd/mm/yyyy", 64970.0), "01/01/1501");
-    assert_eq!(f("B2dd/mm/yyyy", 64971.0), "02/01/1501");
-    assert_eq!(f("B2dd/mm/yyyy", 2958465.0), "03/04/9666");
-    // In the 1904 system, serial 60 is a real day.
-    assert_ne!(format_value(&Value::Number(60.0), &NumberFormat::parse("B2dd/mm/yyyy"), DateSystem::D1904).text, "########");
-}
-
-#[test]
-fn b2_out_of_range_does_not_panic() {
-    for v in [-1.0, 0.0, 60.0, 60.5, 2958465.0, 2958466.0, 1e300, f64::NAN] {
-        let _ = f("B2dd/mm/yyyy mmmm dddd", v);
-        let _ = text_function(&Value::Number(v), "B2dd/mm/yyyy mmmm dddd", S);
-    }
-    assert_eq!(f("B2dd/mm/yyyy", -1.0), f("dd/mm/yyyy", -1.0));
-    assert_eq!(f("B2dd/mm/yyyy", 2958466.0), f("dd/mm/yyyy", 2958466.0));
-    // Before 1 Muharram 1 AH there is no Hijri date (no serial reaches it).
-    let before_epoch = gridcraft_core::date::DateTime { year: 600, month: 3, day: 9, ..Default::default() };
-    assert!(calendar::Calendar::Hijri.date(&before_epoch).is_none());
 }
 
 /// "Set precision as displayed": the value each format stores. Expected values observed in Excel

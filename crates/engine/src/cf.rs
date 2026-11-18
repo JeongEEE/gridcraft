@@ -475,7 +475,7 @@ mod tests {
         ] {
             let mut s = crate::Session::new();
             s.new_workbook();
-            s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 123 ABC"})).unwrap();
+            s.execute("cell.set", json!({"cell": "A1", "input": "שלום 123 ABC"})).unwrap();
             for style in [json!({"align": {"reading_order": "RightToLeft"}}), higher] {
                 s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "noBlanks", "style": style}})).unwrap();
             }

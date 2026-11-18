@@ -926,11 +926,39 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
 #[test]
 fn spreadsheet_context_is_first_character_not_first_strong() {
     use TextDirection::{Auto, Context, LeftToRight as Ltr, RightToLeft as Rtl};
-    for (text, expected) in [("  مرحبا", Rtl), ("123 مرحبا", Ltr), ("(مرحبا)", Ltr), ("  ١٢٣ مرحبا", Ltr), ("\t\n", Ltr)] {
+    for (text, expected) in [("  שלום", Rtl), ("123 שלום", Ltr), ("(שלום)", Ltr), ("\t\n", Ltr)] {
         assert_eq!(Context.resolve(text), expected, "{text}");
     }
-    assert_eq!(Auto.resolve("123 مرحبا"), Rtl);
-    assert_eq!(Auto.resolve("(مرحبا)"), Rtl);
+    assert_eq!(Auto.resolve("123 שלום"), Rtl);
+    assert_eq!(Auto.resolve("(שלום)"), Rtl);
+}
+
+#[test]
+fn explicit_rtl_standard_text_reorders_without_an_arabic_font() {
+    let source = "ABC !";
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(300.0, 100.0);
+    page.text_with_direction(Point::new(10.0, 30.0), 12.0, Font::Helvetica, [0, 0, 0], source, TextDirection::RightToLeft);
+    assert!(page.content.contains("(! ABC) Tj"), "{}", page.content);
+    let mut objects = craft_pdf::classic::Writer::with_capacity(0).unwrap();
+    let mut next = 4;
+    assert!(page.arabic.write_objects(&mut next, &mut objects).unwrap().is_empty());
+    assert_eq!(next, 4, "Latin-only RTL text must not allocate Arabic font objects");
+    assert_eq!(text_width_with_direction(Font::Helvetica, 12.0, source, TextDirection::RightToLeft), text_width(Font::Helvetica, 12.0, source));
+    let pdf = doc.finish().unwrap();
+    assert_eq!(utf16_entry(&pdf, "/ActualText").unwrap(), source);
+    assert!(find(&pdf, b"/Subtype /Type3").is_none());
+
+    let mut huge = PdfDoc::new();
+    huge.add_page(300.0, 100.0).text_with_direction(
+        Point::new(10.0, 30.0),
+        12.0,
+        Font::Helvetica,
+        [0, 0, 0],
+        &"A".repeat(128 * 1024 + 1),
+        TextDirection::RightToLeft,
+    );
+    assert!(huge.finish().unwrap_err().to_string().contains("128 KiB"));
 }
 
 #[test]

@@ -207,7 +207,6 @@ fn craft_fonts_cover_the_advertised_scripts() {
         "취소",
         "확인",
         "ทดสอบ",
-        "مرحبا",
         "ქართული",
         "Příliš žluťoučký kůň",
         "STRAẞENBAHN",

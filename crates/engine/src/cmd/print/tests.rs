@@ -93,12 +93,12 @@ fn wrapping_keeps_combining_marks_with_their_letters() {
 
 #[test]
 fn wrapped_lines_keep_the_paragraph_direction() {
-    let lines = wrap_lines("مرحبا ABC ! DEF ?\nLatin مرحبا !", Font::Helvetica, 10.0, 30.0, TextDirection::Auto);
+    let lines = wrap_lines("שלום ABC ! DEF ?\nLatin שלום !", Font::Helvetica, 10.0, 30.0, TextDirection::Auto);
     let split = lines.iter().position(|l| l.text.starts_with("Latin")).unwrap();
     assert!(split > 0);
     assert!(lines[..split].iter().all(|l| l.direction == TextDirection::RightToLeft));
     assert!(lines[split..].iter().all(|l| l.direction == TextDirection::LeftToRight));
-    let lines = wrap_lines("123 مرحبا ABC !", Font::Helvetica, 10.0, 30.0, TextDirection::Context.resolve("123 مرحبا ABC !"));
+    let lines = wrap_lines("123 שלום ABC !", Font::Helvetica, 10.0, 30.0, TextDirection::Context.resolve("123 שלום ABC !"));
     assert!(lines.iter().all(|l| l.direction == TextDirection::LeftToRight));
 }
 

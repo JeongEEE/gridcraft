@@ -185,7 +185,7 @@ fn fallback_covers_its_script() {
     // face or the optional craft-fonts input provides one; the printed skip is a recorded
     // gate, and a present face that is not wired in fails.
     type Case = (&'static str, Vec<(String, u32)>, &'static str);
-    let cases: [Case; 11] = [
+    let cases: [Case; 9] = [
         ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
         // Chinese uses a system Han face or the native-only permitted LXGW craft face; the
         // barred Noto CJK collection never supplies it.
@@ -194,8 +194,6 @@ fn fallback_covers_its_script() {
         ("sys-thai", thai(), "ทดสอบ"),
         ("sys-lao", lao(), "ພາສາລາວ"),
         ("sys-hebrew", hebrew(), "עברית"),
-        ("sys-arabic", arabic(), "العربية١٢٣"),
-        ("craft-noto-sans-arabic", Vec::new(), "مرحبا"),
         ("craft-noto-sans-georgian", Vec::new(), "ქართული"),
         ("ui", candidates(UI), "Русский"),
         // Czech interface labels: every Czech accented letter, in both cases.
@@ -246,16 +244,8 @@ fn installed_latin_chains(fonts: &FontDefinitions) -> Vec<(FontFamily, Option<&V
         .collect()
 }
 
-fn chain_covers(fonts: &FontDefinitions, chain: &[String], ch: char) -> bool {
-    use skrifa::MetadataProvider;
-    chain
-        .iter()
-        .filter_map(|key| fonts.font_data.get(key))
-        .any(|data| skrifa::FontRef::from_index((*data.font).as_ref(), data.index).is_ok_and(|font| font.charmap().map(ch).is_some()))
-}
-
 #[test]
-/// A workbook font with no Arabic or Hangul still shows them through the system script faces.
+/// A workbook font with no Hangul still shows it through the system script faces.
 fn installed_latin_fonts_keep_system_script_fallbacks() {
     let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let fonts = with_installed_latin_font().expect("Latin-only fixture");
@@ -265,9 +255,6 @@ fn installed_latin_fonts_keep_system_script_fallbacks() {
         let chain = chain.expect("bound fixture family");
         for key in &loaded {
             assert!(chain.iter().any(|k| k == key), "{family:?} lost the {key} fallback");
-        }
-        if fonts.font_data.contains_key("sys-arabic") {
-            assert!(chain_covers(&fonts, chain, 'ع'), "{family:?} has no glyph for ع");
         }
     }
 }

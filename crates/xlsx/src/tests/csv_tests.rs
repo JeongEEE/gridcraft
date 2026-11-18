@@ -177,6 +177,18 @@ fn western_1252_text_stays_latin() {
 }
 
 #[test]
+fn hebrew_1255_bytes_are_not_read_as_arabic() {
+    let reads_as_arabic = |bytes: &[u8]| decode_text(bytes).chars().any(|c| ('\u{0600}'..='\u{06FF}').contains(&c));
+    let plain = [0xF9, 0xEC, 0xE5, 0xED, b',', 0xF2, 0xE5, 0xEC, 0xED];
+    let pointed = [0xF9, 0xC8, 0xD1, 0xEC, 0xE5, 0xC9, 0xED, b' ', 0xF2, 0xE5, 0xC9, 0xEC, 0xC8, 0xED];
+    let maqaf = [0xFA, 0xEC, 0xCE, 0xE0, 0xE1, 0xE9, 0xE1, b',', 0xE1, 0xEF, 0xCE, 0xE2, 0xE5, 0xF8, 0xE9, 0xE5, 0xEF];
+    let gershayim = [0xF6, 0xE4, 0xD8, 0xEC, b',', 0xE3, 0xD8, 0xF8];
+    for bytes in [&plain[..], &pointed, &maqaf, &gershayim] {
+        assert!(!reads_as_arabic(bytes), "{:?}", decode_text(bytes));
+    }
+}
+
+#[test]
 fn delimiter_sniffing() {
     assert_eq!(sniff_delimiter("a;b;c\n1;2;3\n", '"'), b';');
     assert_eq!(sniff_delimiter("a\tb\n1\t2\n", '"'), b'\t');

@@ -21,7 +21,7 @@ fn v(s: &Session, a: &str) -> Value {
 #[test]
 fn format_cells_reading_order_survives_undo_and_xlsx() {
     let mut s = s();
-    s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 123 ABC"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "שלום 123 ABC"})).unwrap();
     s.execute("home.bold", json!({"range": "A1"})).unwrap();
     s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": "RightToLeft"}}})).unwrap();
     let alignment = |s: &Session| {
@@ -43,7 +43,7 @@ fn format_cells_reading_order_survives_undo_and_xlsx() {
     let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
     let cell = CellRef::new(0, 0);
     assert_eq!(reopened.styles.get(reopened.active().unwrap().style_id(cell)), wb.styles.get(wb.active().unwrap().style_id(cell)));
-    assert_eq!(reopened.active().unwrap().value(cell), Value::text("مرحبا 123 ABC"));
+    assert_eq!(reopened.active().unwrap().value(cell), Value::text("שלום 123 ABC"));
     for order in ["LeftToRight", "Context"] {
         s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": order}}})).unwrap();
         assert_eq!(alignment(&s)["reading_order"], order);
@@ -2068,18 +2068,18 @@ fn table_names_are_limited_to_255_characters() {
     s.execute("range.setValues", json!({"range": "A1", "values": [["Qty"], [7]]})).unwrap();
     s.execute("insert.table", json!({"range": "A1:A2", "header": true, "name": "Original"})).unwrap();
 
-    let name_255 = "ع".repeat(255);
+    let name_255 = "가".repeat(255);
     s.execute("table.rename", json!({"table": "Original", "name": name_255})).unwrap();
-    assert!(s.doc().unwrap().wb.table(&"ع".repeat(255)).is_some());
+    assert!(s.doc().unwrap().wb.table(&"가".repeat(255)).is_some());
 
-    let name_256 = "ع".repeat(256);
-    let error = s.execute("table.rename", json!({"table": &"ع".repeat(255), "name": name_256})).unwrap_err();
+    let name_256 = "가".repeat(256);
+    let error = s.execute("table.rename", json!({"table": &"가".repeat(255), "name": name_256})).unwrap_err();
     assert!(error.to_string().contains("not valid"), "{error}");
-    assert!(s.doc().unwrap().wb.table(&"ع".repeat(255)).is_some());
+    assert!(s.doc().unwrap().wb.table(&"가".repeat(255)).is_some());
 
-    let name_200 = "ع".repeat(200);
-    s.execute("table.rename", json!({"table": &"ع".repeat(255), "name": name_200})).unwrap();
-    assert!(s.doc().unwrap().wb.table(&"ع".repeat(200)).is_some());
+    let name_200 = "가".repeat(200);
+    s.execute("table.rename", json!({"table": &"가".repeat(255), "name": name_200})).unwrap();
+    assert!(s.doc().unwrap().wb.table(&"가".repeat(200)).is_some());
 }
 
 #[test]

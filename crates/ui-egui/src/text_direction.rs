@@ -20,13 +20,13 @@ mod tests {
 
     #[test]
     fn context_uses_the_first_non_whitespace_character() {
-        for text in ["مرحبا 123", "  עברית", "\n\tالعربية"] {
+        for text in ["שלום 123", "  עברית", "\n\tעברית"] {
             assert_eq!(cell_direction(None, text), TextDirection::RightToLeft);
         }
-        for text in ["123 مرحبا", "(مرحبا)", "ABC العربية", "", "   "] {
+        for text in ["123 שלום", "(שלום)", "ABC עברית", "", "   "] {
             assert_eq!(cell_direction(None, text), TextDirection::LeftToRight);
         }
-        assert_eq!(cell_direction(Some(ReadingOrder::LeftToRight), "مرحبا"), TextDirection::LeftToRight);
+        assert_eq!(cell_direction(Some(ReadingOrder::LeftToRight), "שלום"), TextDirection::LeftToRight);
         assert_eq!(cell_direction(Some(ReadingOrder::RightToLeft), "123 ABC"), TextDirection::RightToLeft);
     }
 }

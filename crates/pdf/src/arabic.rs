@@ -607,3 +607,20 @@ impl OutlinePen for Pen {
         self.op("h\n");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fallback_mirrors_only_paired_ansi_punctuation() {
+        assert_eq!("[(<«‹abc›»>)]".chars().rev().map(super::mirror_ansi).collect::<String>(), "[(<«‹cba›»>)]");
+    }
+
+    #[test]
+    fn line_breaks_never_use_the_embedded_face() {
+        for ch in ['\n', '\r', '\u{2028}', '\u{2029}'] {
+            assert!(!super::embeddable(true, ch), "{ch:?}");
+        }
+        assert!(super::embeddable(false, '\u{200f}'));
+        assert!(!super::embeddable(false, 'A'));
+    }
+}

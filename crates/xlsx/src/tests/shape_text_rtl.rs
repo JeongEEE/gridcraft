@@ -8,12 +8,12 @@ use gridcraft_model::{Anchor, Color, Shape, ShapeFormat, ShapeKind, ShapeTextAli
 use super::minimal;
 use crate::{read_xlsx, write_xlsx};
 
-const ARABIC_TEXT_BOX: &str = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+const RTL_TEXT_BOX: &str = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
 <xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
 <xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="2" name="TextBox 1"/><xdr:cNvSpPr txBox="1"/></xdr:nvSpPr>
 <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="571500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
 <xdr:txBody><a:bodyPr vertOverflow="clip" wrap="square" rtlCol="0" anchor="t"/><a:lstStyle/>
-<a:p><a:pPr algn="r" rtl="1"/><a:r><a:rPr lang="ar-SA" sz="1100"/><a:t>مرحبا بالعالم</a:t></a:r></a:p>
+<a:p><a:pPr algn="r" rtl="1"/><a:r><a:rPr lang="he-IL" sz="1100"/><a:t>שלום עולם</a:t></a:r></a:p>
 </xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#;
 
 fn read_drawing(drawing: &str) -> Workbook {
@@ -52,9 +52,9 @@ fn text_box(text: &str, format: ShapeFormat) -> Workbook {
 
 #[test]
 fn shape_text_keeps_right_to_left_paragraphs() {
-    let wb = read_drawing(ARABIC_TEXT_BOX);
+    let wb = read_drawing(RTL_TEXT_BOX);
     let shape = &wb.sheet(0).unwrap().shapes[0];
-    assert_eq!(shape.text, "مرحبا بالعالم");
+    assert_eq!(shape.text, "שלום עולם");
     assert!(shape.format.rtl, "rtl=\"1\" on the first paragraph is read");
     assert_eq!(shape.format.align, Some(ShapeTextAlign::Right));
 
@@ -65,17 +65,17 @@ fn shape_text_keeps_right_to_left_paragraphs() {
     let after = &reopened.sheet(0).unwrap().shapes[0];
     assert!(after.format.rtl);
     assert_eq!(after.format.align, Some(ShapeTextAlign::Right));
-    assert_eq!(after.text, "مرحبا بالعالم");
+    assert_eq!(after.text, "שלום עולם");
 
-    let xml = written_drawing(&text_box("سطر\nآخر", ShapeFormat { rtl: true, ..Default::default() }));
+    let xml = written_drawing(&text_box("שורה\nאחרת", ShapeFormat { rtl: true, ..Default::default() }));
     assert_eq!(xml.matches(r#"<a:pPr rtl="1"/>"#).count(), 2, "every paragraph is right-to-left without an alignment: {xml}");
 }
 
 #[test]
 fn shape_text_without_rtl_writes_unchanged_ppr() {
-    let wb = read_drawing(&ARABIC_TEXT_BOX.replace(r#" rtl="1""#, ""));
+    let wb = read_drawing(&RTL_TEXT_BOX.replace(r#" rtl="1""#, ""));
     assert!(!wb.sheet(0).unwrap().shapes[0].format.rtl);
-    let wb = read_drawing(&ARABIC_TEXT_BOX.replace(r#" rtl="1""#, r#" rtl="0""#));
+    let wb = read_drawing(&RTL_TEXT_BOX.replace(r#" rtl="1""#, r#" rtl="0""#));
     assert!(!wb.sheet(0).unwrap().shapes[0].format.rtl);
 
     let xml = written_drawing(&text_box("left\nto right", ShapeFormat { align: Some(ShapeTextAlign::Right), ..Default::default() }));
@@ -88,7 +88,7 @@ fn shape_text_without_rtl_writes_unchanged_ppr() {
 
 #[test]
 fn word_art_keeps_right_to_left_paragraphs() {
-    let mut wb = text_box("مرحبا\nبالعالم", ShapeFormat { rtl: true, align: Some(ShapeTextAlign::Right), ..Default::default() });
+    let mut wb = text_box("שלום\nעולם", ShapeFormat { rtl: true, align: Some(ShapeTextAlign::Right), ..Default::default() });
     wb.sheet_mut(0).unwrap().shapes[0].kind = ShapeKind::WordArt;
     let xml = written_drawing(&wb);
     assert!(xml.contains(r#"<a:prstTxWarp prst="textNoShape">"#));
@@ -98,7 +98,7 @@ fn word_art_keeps_right_to_left_paragraphs() {
     assert_eq!(shape.kind, ShapeKind::WordArt);
     assert!(shape.format.rtl);
     assert_eq!(shape.format.align, Some(ShapeTextAlign::Right));
-    assert_eq!(shape.text, "مرحبا\nبالعالم");
+    assert_eq!(shape.text, "שלום\nעולם");
 }
 
 #[test]
@@ -111,7 +111,7 @@ fn word_art_with_empty_text_keeps_its_kind() {
 
 #[test]
 fn a_text_warp_on_a_filled_ellipse_does_not_make_it_word_art() {
-    let drawing = ARABIC_TEXT_BOX
+    let drawing = RTL_TEXT_BOX
         .replace(r#"<xdr:cNvSpPr txBox="1"/>"#, "<xdr:cNvSpPr/>")
         .replace(r#"prst="rect""#, r#"prst="ellipse""#)
         .replace(r#"anchor="t"/>"#, r#"anchor="t"><a:prstTxWarp prst="textTriangle"><a:avLst/></a:prstTxWarp></a:bodyPr>"#);
@@ -123,7 +123,7 @@ fn a_text_warp_on_a_filled_ellipse_does_not_make_it_word_art() {
 /// shape WordArt: a filled ellipse that carries it reads and saves as the same filled ellipse.
 #[test]
 fn an_explicit_no_warp_on_a_filled_ellipse_stays_an_ellipse() {
-    let drawing = ARABIC_TEXT_BOX
+    let drawing = RTL_TEXT_BOX
         .replace(r#"<xdr:cNvSpPr txBox="1"/>"#, "<xdr:cNvSpPr/>")
         .replace(
             r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#,
@@ -144,7 +144,7 @@ fn an_explicit_no_warp_on_a_filled_ellipse_stays_an_ellipse() {
     let rect = drawing.replace(r#"prst="ellipse""#, r#"prst="rect""#);
     assert_eq!(read_drawing(&rect).sheet(0).unwrap().shapes[0].kind, ShapeKind::Rectangle);
     // WordArt as written (a text box) or as a fill-less, line-less rectangle still reads as WordArt.
-    let text_box = ARABIC_TEXT_BOX.replace(r#"anchor="t"/>"#, r#"anchor="t"><a:prstTxWarp prst="textNoShape"><a:avLst/></a:prstTxWarp></a:bodyPr>"#);
+    let text_box = RTL_TEXT_BOX.replace(r#"anchor="t"/>"#, r#"anchor="t"><a:prstTxWarp prst="textNoShape"><a:avLst/></a:prstTxWarp></a:bodyPr>"#);
     assert_eq!(read_drawing(&text_box).sheet(0).unwrap().shapes[0].kind, ShapeKind::WordArt);
     let bare = text_box
         .replace(r#"<xdr:cNvSpPr txBox="1"/>"#, "<xdr:cNvSpPr/>")

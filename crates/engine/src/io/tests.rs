@@ -208,6 +208,34 @@ fn html_export_marks_right_to_left_sheets() {
 }
 
 #[test]
+fn html_export_lets_rtl_general_text_align_by_direction() {
+    use gridcraft_core::Value;
+    use gridcraft_model::HAlign;
+    let wb = book(
+        false,
+        &[
+            ("A1", Value::text("שלום!"), HAlign::General),
+            ("B1", Value::text("שלום"), HAlign::Left),
+            ("C1", Value::text("עברית"), HAlign::Center),
+            ("D1", Value::text("Hello"), HAlign::General),
+        ],
+    );
+    let html = to_html(&wb, 0).unwrap();
+    assert!(html.contains("<td style=\"\" dir=\"auto\">שלום!</td>"), "General right-to-left text aligns by its direction: {html}");
+    assert!(html.contains("<td style=\"text-align:left;\" dir=\"auto\">שלום</td>"), "explicit alignment stays: {html}");
+    assert!(html.contains("<td style=\"text-align:center;\" dir=\"auto\">עברית</td>"), "{html}");
+    assert!(html.contains("<td style=\"text-align:left;\">Hello</td>"), "{html}");
+    assert!(html.contains("<body><table><tr>"), "a left-to-right sheet has no table direction: {html}");
+
+    let clip = copied(&wb, "A1:D1");
+    let cells: Vec<&str> = clip.split("<td ").skip(1).collect();
+    assert_eq!(cells.len(), 4, "{clip}");
+    assert!(cells[0].contains("dir=\"auto\"") && !cells[0].contains("text-align"), "{clip}");
+    assert!(cells[1].contains("text-align:left;") && cells[1].contains("dir=\"auto\""), "{clip}");
+    assert!(cells[3].contains("text-align:left;") && !cells[3].contains("dir="), "{clip}");
+}
+
+#[test]
 fn html_export_of_latin_ltr_sheet_is_unchanged() {
     use gridcraft_core::Value;
     use gridcraft_model::HAlign;
