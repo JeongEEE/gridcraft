@@ -5,7 +5,6 @@ upstream contribution workflow below for work in this fork.
 
 - `main` mirrors `upstream/main`; never commit personal changes or merge `my-custom` into it.
 - Develop, commit and push personal changes on `my-custom`. Stage only the task's explicit paths.
-- `my-custom-release` is a legacy Actions release branch; local deployment does not push it.
 - Upstream issue claims, upstream PR requirements and shared-CI-only policies apply when
   contributing upstream. Do not post upstream issues/comments for personal fork work.
 - `deploy-macos.sh` and `deploy-windows.ps1` build locally and upload to a shared draft release.

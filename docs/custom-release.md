@@ -12,7 +12,6 @@ Grid는 `JeongEEE/gridcraft`에서 관리하는 GridCraft 기반 개인 스프�
 | `origin` | `https://github.com/JeongEEE/gridcraft.git` |
 | `main` | 개인 커밋 없이 `upstream/main`만 동기화 |
 | `my-custom` | 개인 변경 개발·검증·커밋 |
-| `my-custom-release` | 과거 Actions 배포 기준선(로컬 배포에서는 갱신하지 않음) |
 
 업스트림을 반영하는 순서는 다음과 같다. 충돌은 `my-custom`에서 해결한다.
 
@@ -239,7 +238,7 @@ Windows PC에는 업데이트 개인키가 없어도 된다. 두 OS가 모이면
 업데이트 주소를 함께 바꾸는 별도 작업이다.
 
 릴리스 초안은 위 OS별 스크립트가 `my-custom`의 확정 SHA로 생성한다.
-`my-custom-release`는 과거 배포 기준선으로만 남겨 두며 새 배포에서는 푸시하지 않는다.
+과거 Actions 배포용 `my-custom-release` 브랜치는 삭제했다.
 포크 전용 `release-custom.yml`은 제거했다. upstream workflow는 동기화용으로 유지하며
 이 로컬 배포 경로는 해당 workflow를 호출하거나 그 트리거 브랜치에 푸시하지 않는다.
 
