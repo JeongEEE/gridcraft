@@ -27,20 +27,92 @@ use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-/// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
-struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+/// The app, its native window per workbook window, the main window's saved place, and (macOS) the
+/// menu bar and Finder events.
+struct App(
+    SheetApp,
+    DocWindows,
+    WindowPlace,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+);
+
+/// eframe's storage key for the main window's place (`persist_window`).
+const WINDOW_KEY: &str = "window";
+
+/// eframe's saved window place (egui-winit's `WindowSettings`, whose fields are private), as
+/// `window.ron` spells it.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedWindow {
+    normal_geometry: SavedGeometry,
+    fullscreen: bool,
+    maximized: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedGeometry {
+    outer_position_pixels: Option<egui::Pos2>,
+    scale_factor: f32,
+    inner_size_points: egui::Vec2,
+}
+
+/// What `window.ron` needs from the app (see [`App::save`]).
+#[derive(Default)]
+struct WindowPlace {
+    /// The place last saved while the window was on screen.
+    on_screen: Option<String>,
+    /// The interface size (egui zoom) last frame; `None` before the first frame.
+    zoom: Option<f32>,
+    /// The main window's frame last frame, to notice a move or resize.
+    rect: Option<egui::Rect>,
+}
+
+impl WindowPlace {
+    /// Called after eframe stored the place and before the file is written, at every save
+    /// including the one at quit. Two corrections:
+    /// - eframe divides the size by the interface size, but makes the window at the next start
+    ///   before Grid sets that size again (egui's own state, which would carry it, isn't saved),
+    ///   so at 125 % the window lost a fifth of its size every start. The size is saved undivided.
+    ///   ponytail: eframe stores its value again before this, so with an interface size other
+    ///   than 100 % the file is rewritten at every save, once a second while the window repaints.
+    /// - eframe saves the place even while the window is minimized, when Windows reports it at
+    ///   (-32000, -32000) with no size: restored, it opens a small window in a monitor's corner.
+    ///   The last place on screen is put back, or nothing is kept when there is none yet.
+    fn keep_on_screen(&mut self, storage: &mut dyn eframe::Storage) {
+        let Some(mut saved) = eframe::get_value::<SavedWindow>(storage, WINDOW_KEY) else { return };
+        let size = &mut saved.normal_geometry.inner_size_points;
+        if size.min_elem() >= 1.0 {
+            *size *= self.zoom.unwrap_or(1.0);
+            eframe::set_value(storage, WINDOW_KEY, &saved);
+            self.on_screen = storage.get_string(WINDOW_KEY);
+        } else if let Some(good) = &self.on_screen {
+            storage.set_string(WINDOW_KEY, good.clone());
+        } else {
+            storage.remove_string(WINDOW_KEY);
+        }
+    }
+}
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // A save happens only in a frame. After a move or resize, ask for one past the save
+        // interval so the final place is saved even when nothing else repaints; otherwise the
+        // save at quit would be the first, and the macOS quit doesn't wait for it.
+        let rect = ctx.input_for(egui::ViewportId::ROOT, |i| i.viewport().outer_rect);
+        self.2.zoom = Some(ctx.zoom_factor());
+        if rect != self.2.rect {
+            self.2.rect = rect;
+            ctx.request_repaint_after(self.auto_save_interval() + std::time::Duration::from_millis(100));
+        }
         #[cfg(target_os = "macos")]
         {
-            if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.2 = Some(native_menu::NativeMenu::install(ctx));
+            if self.3.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
+                self.3 = Some(native_menu::NativeMenu::install(ctx));
             }
-            if let Some(m) = &mut self.2 {
+            if let Some(m) = &mut self.3 {
                 m.poll(&mut self.0, ctx, self.1.focused_viewport());
             }
-            apple_events::poll(&self.3, &mut self.0, ctx);
+            apple_events::poll(&self.4, &mut self.0, ctx);
         }
         self.0.logic(ctx);
         self.1.logic(&mut self.0, ctx);
@@ -71,6 +143,9 @@ impl eframe::App for App {
     /// is written only when the window moved or resized.
     fn auto_save_interval(&self) -> std::time::Duration {
         std::time::Duration::from_secs(1)
+    }
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.2.keep_on_screen(storage);
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
@@ -430,10 +505,15 @@ fn main() -> eframe::Result<()> {
                         Err(e) => log::error!("control channel on port {port}: {e}"),
                     }
                 }
-                let windows = DocWindows::new(&mut app, window_builder.clone(), DocWindows::platform_quits_with_last_window());
+                // Grid quits when its last window closes on every platform, macOS included, rather
+                // than staying in the Dock with no window (the upstream macOS default).
+                let windows = DocWindows::new(&mut app, window_builder.clone(), true);
+                // The place read from `window.ron` is the one to fall back to until the window saves one.
+                let place = WindowPlace { on_screen: cc.storage.and_then(|s| s.get_string(WINDOW_KEY)), ..Default::default() };
                 Ok(Box::new(App(
                     app,
                     windows,
+                    place,
                     #[cfg(target_os = "macos")]
                     None,
                     #[cfg(target_os = "macos")]
@@ -457,6 +537,83 @@ fn main() -> eframe::Result<()> {
         return run(options);
     }
     result
+}
+
+#[cfg(test)]
+mod window_place_tests {
+    use super::{SavedWindow, WINDOW_KEY, WindowPlace};
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct Memory(HashMap<String, String>);
+
+    impl eframe::Storage for Memory {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_string(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    /// eframe's `WindowSettings` as it writes them (see `window.ron`).
+    fn place(x: f32, y: f32, w: f32, h: f32) -> String {
+        format!(
+            "(normal_geometry:(outer_position_pixels:Some((x:{x:?},y:{y:?})),scale_factor:1.5,inner_size_points:(x:{w:?},y:{h:?})),fullscreen:false,maximized:false)"
+        )
+    }
+
+    /// Lets eframe store `value`, as it does before calling `App::save`, then returns the place
+    /// that would be written: position and size.
+    fn save(p: &mut WindowPlace, storage: &mut Memory, value: &str) -> Option<(egui::Pos2, egui::Vec2)> {
+        eframe::Storage::set_string(storage, WINDOW_KEY, value.to_string());
+        p.keep_on_screen(storage);
+        read(storage)
+    }
+
+    fn read(storage: &Memory) -> Option<(egui::Pos2, egui::Vec2)> {
+        let w = eframe::get_value::<SavedWindow>(storage, WINDOW_KEY)?;
+        Some((w.normal_geometry.outer_position_pixels?, w.normal_geometry.inner_size_points))
+    }
+
+    #[test]
+    fn a_minimized_window_keeps_its_last_place_on_screen() {
+        let mut storage = Memory::default();
+        let mut p = WindowPlace::default();
+        let on_screen = Some((egui::pos2(300.0, 200.0), egui::vec2(1100.0, 700.0)));
+        assert_eq!(save(&mut p, &mut storage, &place(300.0, 200.0, 1100.0, 700.0)), on_screen, "a place on screen is kept");
+        // Windows reports a minimized window at (-32000, -32000) with no client area.
+        assert_eq!(save(&mut p, &mut storage, &place(-32000.0, -32000.0, 0.0, 0.0)), on_screen, "the minimized place is replaced");
+        let moved = Some((egui::pos2(10.0, 10.0), egui::vec2(800.0, 600.0)));
+        assert_eq!(save(&mut p, &mut storage, &place(10.0, 10.0, 800.0, 600.0)), moved, "back on screen, the new place is saved");
+    }
+
+    #[test]
+    fn the_size_is_saved_at_the_interface_size_the_window_opens_with() {
+        // At 125 % eframe stores the size divided by 1.25, and the next start makes the window
+        // before the interface size applies: saved as is, it shrank by a fifth every start.
+        let mut storage = Memory::default();
+        let mut p = WindowPlace { zoom: Some(1.25), ..Default::default() };
+        let saved = save(&mut p, &mut storage, &place(300.0, 200.0, 1152.0, 720.0));
+        assert_eq!(saved, Some((egui::pos2(300.0, 200.0), egui::vec2(1440.0, 900.0))), "position untouched, size undivided");
+        // The place put back for a minimized window is the corrected one, not corrected twice.
+        assert_eq!(save(&mut p, &mut storage, &place(-32000.0, -32000.0, 0.0, 0.0)), saved);
+    }
+
+    #[test]
+    fn without_a_place_on_screen_nothing_is_kept() {
+        let mut storage = Memory::default();
+        let mut p = WindowPlace::default();
+        p.keep_on_screen(&mut storage);
+        assert!(storage.0.is_empty(), "no place, nothing written (runs without preferences)");
+        // Minimized before the first save: the next start uses the default place instead.
+        assert_eq!(save(&mut p, &mut storage, &place(-32000.0, -32000.0, 0.0, 0.0)), None);
+        assert!(storage.0.is_empty());
+    }
 }
 
 #[cfg(test)]

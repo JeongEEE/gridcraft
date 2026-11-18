@@ -15,7 +15,9 @@ gridcraft-engine = { workspace = true }
 gridcraft-ui-egui = { workspace = true }
 gridcraft-sandbox = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "clipboard", "persistence"] }
-egui = { workspace = true }
+# `serde`: the saved window place (`SavedWindow` in main.rs); eframe's `persistence` enables it too.
+egui = { workspace = true, features = ["serde"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 image = { workspace = true }

@@ -2,7 +2,7 @@ use super::controls::{act, control_keytip};
 use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, icon_button, json, pos2, small_button, theme, theme_choices, vec2};
 
 /// macOS draws the window into the title bar (`with_fullsize_content_view`) and AppKit paints the
-/// traffic lights itself, centred in its standard 28 pt title-bar band. Moving them would take
+/// traffic lights itself, centred in its title-bar band (`MAC_TITLE_BAR`). Moving them would take
 /// AppKit calls (`unsafe`, forbidden here), so on macOS the title bar is that band: the lights sit
 /// vertically centred in it, with the controls beside them (#170).
 const MAC: bool = cfg!(target_os = "macos");
