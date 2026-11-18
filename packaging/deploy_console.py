@@ -154,7 +154,7 @@ class Console:
         self.text(f'  HEAD가 위 소스 {d.sha[:8]}와 같은지 확인한 뒤:')
         for command in commands:
             self.text(f'    {command}')
-        self.text('  두 OS 업로드 후 MacBook에서 finalize하고, 공개 질문에 y를 입력하면 배포됩니다.')
+        self.text('  두 OS 업로드 후 MacBook에서 finalize하면 확인 질문 없이 바로 공개·배포됩니다.')
 
     def failure(self, error, retry):
         if self.log_path:

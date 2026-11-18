@@ -134,13 +134,13 @@ class LocalDeployTest(unittest.TestCase):
         if self.during_build: self.during_build()
         return ['fork-identity','updater-tests','package-policy','cli-smoke']
 
-    def run_deploy(self, os_name='macos', version=None, *, finalize=False, key=False, draft=False, dry_run=False, answer='n'):
+    def run_deploy(self, os_name='macos', version=None, *, finalize=False, key=False, draft=False, dry_run=False):
         args = argparse.Namespace(platform=os_name, version=version, finalize=finalize, draft=draft, dry_run=dry_run,
                                   key_file=str(self.key) if key else None)
         out = io.StringIO()
         try:
             with patch.object(deploy,'ROOT',self.repo), patch('platform.system',return_value='Darwin' if os_name=='macos' else 'Windows'), \
-                    patch('local_build.build',side_effect=self.build), patch('builtins.input',side_effect=EOFError if answer is None else lambda prompt: answer), \
+                    patch('local_build.build',side_effect=self.build), \
                     contextlib.redirect_stdout(out):
                 deploy.Deployment(args).run()
             return True, out.getvalue()
@@ -188,7 +188,7 @@ class LocalDeployTest(unittest.TestCase):
         self.ok('windows',draft=True)
         self.assertEqual(len(self.release()['assets']),6)
         self.assertEqual(self.git('rev-parse','HEAD'),self.sha)
-        self.ok('macos',finalize=True,key=True,answer='y')
+        self.ok('macos',finalize=True,key=True)
         self.assertEqual(len(self.release()['assets']),9)
         self.assertTrue((self.gh/'published').exists())
         self.assertEqual(self.builds,['macos','windows'])
@@ -197,7 +197,7 @@ class LocalDeployTest(unittest.TestCase):
 
     def test_windows_can_upload_first_and_mac_can_finish(self):
         self.ok('windows',draft=True)
-        self.ok('macos',key=True,answer='y')
+        self.ok('macos',key=True)
         self.assertTrue((self.gh/'published').exists())
 
     def test_complete_upload_without_key_stays_draft(self):
@@ -231,7 +231,7 @@ class LocalDeployTest(unittest.TestCase):
 
     def test_publication_summary_does_not_offer_finalize_again(self):
         self.ok('macos', draft=True); self.ok('windows', draft=True)
-        message = self.ok(finalize=True, key=True, answer='y')
+        message = self.ok(finalize=True, key=True)
         self.assertIn('공개 완료', message)
         self.assertNotIn('./deploy-macos.sh 0.19.7 --finalize', message)
 
@@ -428,34 +428,36 @@ class LocalDeployTest(unittest.TestCase):
 
     def test_release_asset_change_during_confirmation_blocks_publication(self):
         self.ok('macos',draft=True); self.ok('windows',draft=True)
-        def replace_asset(message):
+        original_hash=deploy.assets.file_hash
+        def replace_asset(path):
+            # The last step before publication re-hashes uploaded files; change the release meanwhile.
             r=self.release(); r['assets'][0]['id']='new upload'; self.change_release(assets=r['assets'])
-            return 'y'
+            return original_hash(path)
         args=argparse.Namespace(platform='macos',version=None,finalize=True,draft=False,dry_run=False,key_file=str(self.key))
-        with patch.object(deploy,'ROOT',self.repo), patch('builtins.input',side_effect=replace_asset):
+        with patch.object(deploy,'ROOT',self.repo), patch.object(deploy.assets,'file_hash',side_effect=replace_asset):
             with self.assertRaises(deploy.DeployError): deploy.Deployment(args).run()
         self.assertFalse((self.gh/'published').exists())
 
     def test_missing_platform_prevents_finalize(self):
         self.ok(draft=True)
-        self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+        self.assertFalse(self.run_deploy(finalize=True,key=True)[0])
         self.assertFalse((self.gh/'published').exists())
 
     def test_tampered_payload_or_receipt_cannot_be_signed_or_published(self):
         self.ok('macos',draft=True); self.ok('windows',draft=True)
         f=self.gh/'assets/grid-0.19.7-windows-x64.msi'; original=f.read_bytes(); f.write_bytes(b'tampered')
-        self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+        self.assertFalse(self.run_deploy(finalize=True,key=True)[0])
         f.write_bytes(original)
         receipt=self.gh/'assets/grid-0.19.7-windows-build.json'
         data=json.loads(receipt.read_text()); data['source']='b'*40; receipt.write_text(json.dumps(data))
-        self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+        self.assertFalse(self.run_deploy(finalize=True,key=True)[0])
         self.assertFalse((self.gh/'published').exists())
 
     def test_existing_tag_with_wrong_commit_cannot_be_published(self):
         self.ok('macos',draft=True); self.ok('windows',draft=True)
         self.git('commit','--allow-empty','-m','other'); self.git('tag','gridcraft-v0.19.7'); self.git('push','origin','refs/tags/gridcraft-v0.19.7')
         self.git('reset','--soft',self.sha)
-        self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+        self.assertFalse(self.run_deploy(finalize=True,key=True)[0])
         self.assertFalse((self.gh/'published').exists())
 
     def test_signer_uses_frozen_source_when_checkout_changes_after_key_read(self):
@@ -466,26 +468,25 @@ class LocalDeployTest(unittest.TestCase):
             if path == self.key: (self.repo/'source.rs').write_text('// changed after private key read')
             return value
         with patch.object(Path,'read_text',changed_after_key):
-            self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+            self.assertFalse(self.run_deploy(finalize=True,key=True)[0])
         self.assertEqual((self.gh/'sign-source').read_text(),'// committed source\n')
         self.assertFalse((self.gh/'published').exists())
 
     def test_sign_failure_keeps_draft_unpublished(self):
         self.ok('macos',draft=True); self.ok('windows',draft=True); self.settings(sign_failure=True)
-        self.assertFalse(self.run_deploy(finalize=True,key=True,answer='y')[0])
+        self.assertFalse(self.run_deploy(finalize=True,key=True)[0])
         self.assertFalse((self.gh/'published').exists())
 
-    def test_eof_keeps_signed_draft_unpublished(self):
+    def test_finalize_publishes_without_prompt(self):
         self.ok('macos',draft=True); self.ok('windows',draft=True)
-        self.ok(finalize=True,key=True,answer=None)
+        with patch('builtins.input',side_effect=AssertionError('no prompt expected')):
+            self.ok(finalize=True,key=True)
+        self.assertTrue((self.gh/'published').exists())
+
+    def test_draft_flag_keeps_signed_draft(self):
+        self.ok('macos',draft=True); self.ok('windows',draft=True)
+        self.ok(finalize=True,key=True,draft=True)
         self.assertEqual(len(self.release()['assets']),9)
         self.assertFalse((self.gh/'published').exists())
-
-    def test_no_confirmation_keeps_signed_draft(self):
-        self.ok('macos',draft=True); self.ok('windows',draft=True)
-        self.ok(finalize=True,key=True,answer='')
-        self.assertEqual(len(self.release()['assets']),9)
-        self.assertFalse((self.gh/'published').exists())
-
 
 if __name__=='__main__': unittest.main()

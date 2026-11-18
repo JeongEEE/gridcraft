@@ -296,20 +296,16 @@ class Deployment:
                 if assets.file_hash(download/name) != assets.file_hash(folder/name):
                     raise DeployError(f'업로드된 파일이 다릅니다: {name}')
             print(f'\nGrid {self.version} · 두 OS·해시·서명·자산 9개 확인 완료\n{ready["url"]}', flush=True)
-            if not self.args.draft:
-                try:
-                    answer = input('이 버전을 공개하여 자동 업데이트를 배포할까요? [y/N] ').strip().lower()
-                except EOFError:
-                    answer = ''
-                if answer in {'y', 'yes', '예'}:
-                    self.assert_source(); self.check_tag()
-                    if self.fingerprint(self.view()) != self.fingerprint(ready):
-                        raise DeployError('확인 중 릴리스 자산이 바뀌어 공개하지 않습니다.')
-                    self.gh('release', 'edit', self.tag, '--draft=false', '--latest', capture=False, label='릴리스 공개')
-                    # Draft URLs can change when GitHub publishes the release.
-                    ready['url'] = f'https://github.com/{REPO}/releases/tag/{self.tag}'
-                    return 'published', ready
-            return 'ready', ready
+            if self.args.draft:
+                return 'ready', ready
+            # Running the deploy without --draft is the owner's publish authorization; no prompt.
+            self.assert_source(); self.check_tag()
+            if self.fingerprint(self.view()) != self.fingerprint(ready):
+                raise DeployError('확인 중 릴리스 자산이 바뀌어 공개하지 않습니다.')
+            self.gh('release', 'edit', self.tag, '--draft=false', '--latest', capture=False, label='릴리스 공개')
+            # Draft URLs can change when GitHub publishes the release.
+            ready['url'] = f'https://github.com/{REPO}/releases/tag/{self.tag}'
+            return 'published', ready
 
     def run(self):
         self.console.banner(self.args.platform, self.args.finalize, self.args.dry_run)
@@ -344,8 +340,8 @@ def main():
     parser.add_argument('version', nargs='?', help='X.Y.Z. 생략하면 현재 미공개 버전 재사용, 공개됐으면 다음 패치')
     parser.add_argument('--platform', choices=['macos', 'windows'], required=True)
     parser.add_argument('--dry-run', action='store_true', help='변경·네트워크 요청 없이 절차만 확인')
-    parser.add_argument('--draft', action='store_true', help='공개 질문 없이 초안 유지')
-    parser.add_argument('--finalize', action='store_true', help='빌드 없이 두 OS 업로드 결과 검증·서명·공개 확인')
+    parser.add_argument('--draft', action='store_true', help='서명까지 마치고 공개하지 않고 초안 유지')
+    parser.add_argument('--finalize', action='store_true', help='빌드 없이 두 OS 업로드 결과 검증·서명·공개')
     parser.add_argument('--key-file', help='기존 업데이트 개인키 파일 경로 (기본 GRID_UPDATE_KEY_FILE 또는 ~/Dev/keystores/grid/update-private-key.hex)')
     args = parser.parse_args()
     deployment = Deployment(args)
