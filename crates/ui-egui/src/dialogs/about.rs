@@ -5,7 +5,7 @@ use super::Dialog;
 pub(super) fn about(ui: &mut egui::Ui, d: &mut Dialog) {
     ui.horizontal(|ui| {
         for tab in ["About", "Contributors", "Models"] {
-            if ui.selectable_label(d.tab == tab, tab).clicked() {
+            if ui.selectable_label(d.tab == tab, crate::widgets::tr(ui, tab)).clicked() {
                 d.tab = tab.to_string();
             }
         }
@@ -16,7 +16,7 @@ pub(super) fn about(ui: &mut egui::Ui, d: &mut Dialog) {
         "Models" => crate::credits::models_ui(ui),
         _ => {
             ui.heading("Grid");
-            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            ui.label(crate::widgets::tr_fill(ui, "Version {version}", &[("version", env!("CARGO_PKG_VERSION"))]));
             ui.add_space(4.0);
             ui.label(crate::widgets::tr(ui, "A personal spreadsheet based on GridCraft by the ArtCraft team."));
             ui.hyperlink_to(crate::widgets::tr(ui, "Grid releases and source"), "https://github.com/JeongEEE/gridcraft");

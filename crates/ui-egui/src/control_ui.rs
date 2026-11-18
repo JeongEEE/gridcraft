@@ -375,7 +375,12 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         let mut search = val(d, "search");
         let command = val(d, "command");
         ui.label(crate::widgets::tr(ui, "Command:"));
-        ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search commands").desired_width(f32::INFINITY).id_salt("assign_search"));
+        ui.add(
+            egui::TextEdit::singleline(&mut search)
+                .hint_text(crate::widgets::tr(ui, "Search commands"))
+                .desired_width(f32::INFINITY)
+                .id_salt("assign_search"),
+        );
         egui::Frame::NONE.fill(t.input_bg).stroke(Stroke::new(1.0, t.input_border)).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_size(vec2(ui.available_width(), 130.0));
             egui::ScrollArea::vertical().max_height(130.0).show(ui, |ui| {
@@ -523,7 +528,7 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
             }
             fields.push(("link", "Cell link:"));
             for (key, label) in fields {
-                ui.label(label);
+                ui.label(crate::widgets::tr(ui, label));
                 text_field(ui, d, key, if key == "link" { 160.0 } else { 90.0 });
                 ui.end_row();
             }
@@ -548,7 +553,7 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         });
         for (key, label) in [("locked", "Locked (when the sheet is protected)"), ("print", "Print object")] {
             let mut on = d.values.get(key).and_then(Json::as_bool).unwrap_or(true);
-            ui.checkbox(&mut on, label);
+            ui.checkbox(&mut on, crate::widgets::tr(ui, label));
             d.values.insert(key.into(), json!(on));
         }
     }

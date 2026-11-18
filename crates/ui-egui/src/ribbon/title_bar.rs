@@ -113,7 +113,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ui.label(crate::widgets::tr(ui, "Can't Undo"));
                 }
                 for (i, l) in labels.iter().enumerate() {
-                    if ui.button(format!("Undo {l}")).clicked() {
+                    if ui.button(crate::widgets::tr_fill(ui, "Undo {action}", &[("action", crate::widgets::tr(ui, l))])).clicked() {
                         app.run_or_alert("edit.undo", json!({"steps": i + 1}));
                     }
                 }
@@ -132,7 +132,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ("Sort A to Z", "data.sortAscending"),
                     ("Calculate Now", "formulas.calculateNow"),
                 ] {
-                    if ui.button(label).clicked() {
+                    if ui.button(crate::widgets::tr(ui, label)).clicked() {
                         app.run_or_alert(id, json!({}));
                     }
                 }
@@ -159,7 +159,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     for (label, fmt) in
                         [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
                     {
-                        if ui.button(label).clicked() {
+                        if ui.button(crate::widgets::tr(ui, label)).clicked() {
                             app.open_dialog("saveCopy", json!({"format": fmt}));
                         }
                     }

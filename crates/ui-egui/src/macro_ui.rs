@@ -235,8 +235,12 @@ pub fn question_box(app: &mut SheetApp, ctx: &egui::Context) {
         Some(Some(_)) if app.session.active().is_none_or(|d| d.uid != q.doc) => {
             app.macros.question = None;
             let book = app.session.documents().iter().find(|d| d.uid == q.doc).map(|d| d.display_title()).unwrap_or_default();
-            app.message =
-                Some((q.title.clone(), format!("The question was about “{book}”, which is no longer the active workbook, so nothing was done.")));
+            app.message = Some((
+                q.title.clone(),
+                app.ui
+                    .language
+                    .tr_fill("The question was about “{book}”, which is no longer the active workbook, so nothing was done.", &[("book", &book)]),
+            ));
         }
         Some(Some(extra)) => {
             app.macros.question = None;
@@ -260,7 +264,7 @@ pub fn status(app: &mut SheetApp, ui: &mut Ui) {
         ui.add_space(12.0);
         let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
         ui.painter().circle_filled(r.center(), 4.5, t.breakpoint);
-        ui.label(egui::RichText::new(format!("Debugging “{name}”")).font(theme::ui_font(12.5)).color(t.text));
+        ui.label(egui::RichText::new(crate::widgets::tr_fill(ui, "Debugging “{name}”", &[("name", &name)])).font(theme::ui_font(12.5)).color(t.text));
         if app.macros.editor.is_none() {
             let show =
                 ui.add(egui::Button::new(egui::RichText::new(app.ui.language.tr("Show")).font(theme::ui_font(12.0))).min_size(vec2(40.0, 18.0)));
@@ -488,14 +492,14 @@ pub fn macros_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
             if ui.add_enabled(found.is_some(), egui::Button::new(crate::widgets::tr(ui, "Delete")).min_size(w)).clicked()
                 && let Some(e) = &found
             {
-                let (title, command, what) = match e.kind {
-                    Kind::Macro => ("Delete Macro", "macro.delete", "macro"),
-                    Kind::Script => ("Delete Script", "automate.deleteScript", "script"),
+                let (title, command, text) = match e.kind {
+                    Kind::Macro => ("Delete Macro", "macro.delete", "Do you want to delete macro “{name}”?"),
+                    Kind::Script => ("Delete Script", "automate.deleteScript", "Do you want to delete script “{name}”?"),
                 };
                 app.macros.question = Some(Question {
                     doc: app.session.active().map_or(0, |d| d.uid),
                     title: title.into(),
-                    text: format!("Do you want to delete {what} “{}”?", e.name),
+                    text: app.ui.language.tr_fill(text, &[("name", &e.name)]),
                     command: command.into(),
                     params: json!({"name": e.name}),
                     choices: vec![("Delete".into(), json!({}))],
@@ -543,7 +547,7 @@ fn run_entry(app: &mut SheetApp, e: &Entry) {
 /// Macro Options: the shortcut letter and the description of the selected macro.
 fn options(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog) {
     let name = d.values.get("name").and_then(Json::as_str).unwrap_or("").trim().to_string();
-    ui.label(egui::RichText::new(format!("Macro name: {name}")).strong());
+    ui.label(egui::RichText::new(crate::widgets::tr_fill(ui, "Macro name: {name}", &[("name", &name)])).strong());
     ui.add_space(4.0);
     ui.label(crate::widgets::tr(ui, "Shortcut key:"));
     let mut key = d.values.get("shortcut").and_then(Json::as_str).unwrap_or("").to_string();

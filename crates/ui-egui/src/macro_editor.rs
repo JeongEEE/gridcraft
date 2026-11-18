@@ -290,15 +290,15 @@ pub fn command_label(id: &str) -> String {
 }
 
 /// A step in one line: "Set D2 to =B2*C2", "Repeat for each row of Input.data".
-pub fn summary(st: &Step) -> String {
+pub fn summary(st: &Step, lang: crate::i18n::Language) -> String {
     match &st.kind {
         StepKind::Command { id, params } => {
             let p = |k: &str| params.get(k).map(short);
             match (id.as_str(), p("cell"), p("input"), p("range")) {
-                ("cell.set", Some(c), Some(i), _) => format!("Set {c} to {i}"),
-                ("selection.set", _, _, Some(r)) => format!("Select {r}"),
+                ("cell.set", Some(c), Some(i), _) => lang.tr_fill("Set {cell} to {input}", &[("cell", &c), ("input", &i)]),
+                ("selection.set", _, _, Some(r)) => lang.tr_fill("Select {range}", &[("range", &r)]),
                 _ => {
-                    let label = command_label(id);
+                    let label = lang.tr(&command_label(id)).to_owned();
                     let args: Vec<String> =
                         params.as_object().map(|o| o.iter().take(3).map(|(k, v)| format!("{k}: {}", short(v))).collect()).unwrap_or_default();
                     if args.is_empty() { label } else { format!("{label} · {}", args.join(", ")) }
@@ -306,7 +306,9 @@ pub fn summary(st: &Step) -> String {
             }
         }
         StepKind::Repeat { over, of, .. } => {
-            format!("Repeat for each {} of {}", if *of == RepeatOf::Rows { "row" } else { "column" }, if over.is_empty() { "…" } else { over })
+            let over = if over.is_empty() { "…" } else { over };
+            let template = if *of == RepeatOf::Rows { "Repeat for each row of {over}" } else { "Repeat for each column of {over}" };
+            lang.tr_fill(template, &[("over", over)])
         }
         StepKind::If { cell, op, value, .. } => {
             let op = match op {
@@ -316,17 +318,17 @@ pub fn summary(st: &Step) -> String {
                 CompareOp::Ge => "≥",
                 CompareOp::Lt => "<",
                 CompareOp::Le => "≤",
-                CompareOp::Empty => return format!("If {cell} is empty"),
-                CompareOp::NotEmpty => return format!("If {cell} isn't empty"),
-                CompareOp::Contains => "contains",
+                CompareOp::Empty => return lang.tr_fill("If {cell} is empty", &[("cell", cell)]),
+                CompareOp::NotEmpty => return lang.tr_fill("If {cell} isn't empty", &[("cell", cell)]),
+                CompareOp::Contains => lang.tr("contains"),
             };
-            format!("If {cell} {op} {}", short(value))
+            lang.tr_fill("If {cell} {op} {value}", &[("cell", cell), ("op", op), ("value", &short(value))])
         }
         StepKind::Stop { message, .. } => {
             if message.is_empty() {
-                "Stop".into()
+                lang.tr("Stop").into()
             } else {
-                format!("Stop: {message}")
+                lang.tr_fill("Stop: {message}", &[("message", message)])
             }
         }
     }
@@ -576,7 +578,11 @@ fn at_home(app: &mut SheetApp, ed: &Editor, title: &str) -> bool {
         return true;
     }
     let book = home_title(app, ed);
-    app.message = Some((title.into(), format!("The macro “{}” is in “{book}”. Switch back to it to save, check or run the macro.", ed.draft.name)));
+    let text = app.ui.language.tr_fill(
+        "The macro “{name}” is in “{book}”. Switch back to it to save, check or run the macro.",
+        &[("name", &ed.draft.name), ("book", &book)],
+    );
+    app.message = Some((title.into(), text));
     false
 }
 
@@ -740,7 +746,7 @@ pub fn check(app: &mut SheetApp, ed: &mut Editor) {
             {
                 ed.errors.insert(step.to_string(), e.get("message").and_then(Json::as_str).unwrap_or("").to_string());
             }
-            ed.outcome = Some(check_text(&v));
+            ed.outcome = Some(check_text(&v, app.ui.language));
             ed.check = Some(v);
         }
         Err(e) => {
@@ -750,23 +756,28 @@ pub fn check(app: &mut SheetApp, ed: &mut Editor) {
     }
 }
 
-fn check_text(v: &Json) -> String {
+fn check_text(v: &Json, lang: crate::i18n::Language) -> String {
     if let Some(errors) = v["errors"].as_array().filter(|e| !e.is_empty()) {
         return errors.iter().filter_map(Json::as_str).collect::<Vec<_>>().join(" ");
     }
     if let Some(asks) = v["needsApproval"].as_array() {
-        return format!("Needs approval before it can run: it {}.", asks.iter().filter_map(Json::as_str).collect::<Vec<_>>().join(", "));
+        let asks = asks.iter().filter_map(Json::as_str).collect::<Vec<_>>().join(", ");
+        return lang.tr_fill("Needs approval before it can run: it {asks}.", &[("asks", &asks)]);
     }
     let cells: u64 = v["footprint"]["sheets"].as_array().into_iter().flatten().filter_map(|s| s["changed"].as_u64()).sum();
     let conflicts = v["conflicts"].as_u64().unwrap_or(0);
-    let mut text = format!("Check passed: writes {cells} cell{}", if cells == 1 { "" } else { "s" });
-    if conflicts > 0 {
-        text.push_str(&format!(", {conflicts} of them hold data (red)"));
+    let (cells, conflicts) = (cells.to_string(), conflicts.to_string());
+    let plural = if cells == "1" { "" } else { "s" };
+    let mut text = if conflicts != "0" {
+        lang.tr_fill(
+            "Check passed: writes {cells} cell{s}, {conflicts} of them hold data (red)",
+            &[("cells", &cells), ("s", plural), ("conflicts", &conflicts)],
+        )
     } else {
-        text.push_str(", over no data");
-    }
+        lang.tr_fill("Check passed: writes {cells} cell{s}, over no data", &[("cells", &cells), ("s", plural)])
+    };
     if v["footprint"]["partial"].is_object() {
-        text.push_str(". Later steps can't be previewed.");
+        text.push_str(lang.tr(". Later steps can't be previewed."));
     }
     text
 }
@@ -780,7 +791,10 @@ pub fn run(app: &mut SheetApp, ed: &mut Editor) {
     ed.errors.clear();
     let name = ed.draft.name.clone();
     match macro_ui::call(app, "Run Macro", "macro.run", json!({"name": name, "inputs": run_inputs(ed)})) {
-        Some(v) => ed.outcome = Some(format!("Ran {} step{}.", v["ran"].as_u64().unwrap_or(0), if v["ran"] == 1 { "" } else { "s" })),
+        Some(v) => {
+            let ran = v["ran"].as_u64().unwrap_or(0).to_string();
+            ed.outcome = Some(app.ui.language.tr_fill("Ran {count} step{s}.", &[("count", &ran), ("s", if v["ran"] == 1 { "" } else { "s" })]));
+        }
         None => {
             if let Some((_, text)) = app.message.as_ref()
                 && let Some((path, msg)) = error_step(text)
@@ -824,7 +838,7 @@ pub fn debug_action(app: &mut SheetApp, ed: &mut Editor, action: &str) {
         let name = ed.draft.name.clone();
         let p = with(json!({"name": name, "inputs": run_inputs(ed), "action": "start"}), bp_params(ed));
         let Some(v) = macro_ui::call(app, "Debug Macro", "macro.debug", p) else { return };
-        apply_debug(ed, &v);
+        apply_debug(ed, &v, app.ui.language);
         if action == "step" || v["state"] != "paused" {
             return;
         }
@@ -837,19 +851,19 @@ pub fn debug_action(app: &mut SheetApp, ed: &mut Editor, action: &str) {
         other => json!({"action": other}),
     };
     if let Some(v) = macro_ui::call(app, "Debug Macro", "macro.debug", with(p, bp_params(ed))) {
-        apply_debug(ed, &v);
+        apply_debug(ed, &v, app.ui.language);
     }
 }
 
 /// Stop: ends the debugged run, keeping its changes as one undo step or undoing them.
 pub fn stop(app: &mut SheetApp, ed: &mut Editor, keep: bool) {
     if let Some(v) = macro_ui::call(app, "Debug Macro", "macro.debug", json!({"action": "stop", "keep": keep})) {
-        apply_debug(ed, &v);
+        apply_debug(ed, &v, app.ui.language);
     }
 }
 
 /// Takes in a `macro.debug` result: paused (select the current step), or ended (say how).
-pub fn apply_debug(ed: &mut Editor, v: &Json) {
+pub fn apply_debug(ed: &mut Editor, v: &Json, lang: crate::i18n::Language) {
     match v["state"].as_str() {
         Some("paused") => {
             if let Some(step) = v["current"]["step"].as_str() {
@@ -863,19 +877,25 @@ pub fn apply_debug(ed: &mut Editor, v: &Json) {
             ed.debug = None;
             let executed = v["executed"].as_u64().unwrap_or(0);
             ed.outcome = Some(match state {
-                "finished" => format!("Finished: {executed} step{} ran, one undo step.", if executed == 1 { "" } else { "s" }),
+                "finished" => lang.tr_fill(
+                    "Finished: {count} step{s} ran, one undo step.",
+                    &[("count", &executed.to_string()), ("s", if executed == 1 { "" } else { "s" })],
+                ),
                 "failed" => {
                     if let Some(step) = v["error"]["step"].as_str() {
                         let msg = v["error"]["message"].as_str().unwrap_or("").to_string();
                         ed.errors.insert(step.to_string(), msg);
                         ed.selected = Some(step.to_string());
                     }
-                    v["message"].as_str().unwrap_or("The macro failed; nothing was changed.").to_string()
+                    v["message"].as_str().unwrap_or(lang.tr("The macro failed; nothing was changed.")).to_string()
                 }
-                _ if v["kept"] == true => format!("Stopped after {executed} step{}; the changes were kept.", if executed == 1 { "" } else { "s" }),
+                _ if v["kept"] == true => lang.tr_fill(
+                    "Stopped after {count} step{s}; the changes were kept.",
+                    &[("count", &executed.to_string()), ("s", if executed == 1 { "" } else { "s" })],
+                ),
                 _ => match v["stopped"].as_str() {
-                    Some(msg) => format!("Stopped: {msg}"),
-                    None => "Stopped; the changes were undone.".into(),
+                    Some(msg) => lang.tr_fill("Stopped: {message}", &[("message", msg)]),
+                    None => lang.tr("Stopped; the changes were undone.").into(),
                 },
             });
         }
@@ -893,7 +913,7 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
     };
     // A prompt's button re-ran a debugger action (making room for the output, approving).
     if let Some(v) = app.macros.debug_result.take() {
-        apply_debug(&mut ed, &v);
+        apply_debug(&mut ed, &v, app.ui.language);
     }
     if ed.start_check {
         ed.start_check = false;
@@ -919,7 +939,7 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
     let fit = (screen.size() - vec2(16.0, 16.0)).max(vec2(240.0, 200.0));
     let mut win_open = true;
     ed.refs.drawn = false;
-    egui::Window::new(format!("Macro: {}{dirty_mark}", ed.draft.name))
+    egui::Window::new(format!("{}{dirty_mark}", app.ui.language.tr_fill("Macro: {name}", &[("name", &ed.draft.name)])))
         .id(Id::unique("gridcraft.macro_editor"))
         .collapsible(false)
         .resizable(true)
@@ -933,8 +953,12 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
             if !home {
                 let t = Tokens::get(ui.ctx());
                 ui.label(
-                    egui::RichText::new(format!("This macro is in “{home_title}”. Switch back to it to edit, check or run the macro."))
-                        .color(t.danger),
+                    egui::RichText::new(crate::widgets::tr_fill(
+                        ui,
+                        "This macro is in “{book}”. Switch back to it to edit, check or run the macro.",
+                        &[("book", &home_title)],
+                    ))
+                    .color(t.danger),
                 );
             }
             ui.add_enabled_ui(home, |ui| {
@@ -1144,7 +1168,7 @@ fn prompts(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor, open: &mut 
         let mut answer: Option<Option<bool>> = None;
         egui::Modal::new(Id::unique("gridcraft.macro_editor.close")).show(ctx, |ui| {
             ui.set_width(360.0);
-            ui.label(egui::RichText::new(format!("Save changes to macro “{}”?", ed.draft.name)).strong());
+            ui.label(egui::RichText::new(crate::widgets::tr_fill(ui, "Save changes to macro “{name}”?", &[("name", &ed.draft.name)])).strong());
             ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button(crate::widgets::tr(ui, "Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -1293,16 +1317,16 @@ fn status_line(app: &SheetApp, ui: &mut Ui, ed: &Editor, t: &Tokens) {
         let cur = &st["current"];
         let step = cur["step"].as_str().unwrap_or("");
         let what = match cur["kind"].as_str() {
-            Some("command") => command_label(cur["command"].as_str().unwrap_or("")),
+            Some("command") => crate::widgets::tr(ui, &command_label(cur["command"].as_str().unwrap_or(""))).to_owned(),
             Some(k) => k.to_string(),
             None => String::new(),
         };
-        let mut head = format!("Paused before step {step} · {what}");
+        let mut head = crate::widgets::tr_fill(ui, "Paused before step {step} · {what}", &[("step", step), ("what", &what)]);
         if let (Some(at), Some(of)) = (cur["iteration"]["at"].as_u64(), cur["iteration"]["of"].as_u64()) {
-            head.push_str(&format!(" · pass {at} of {of}"));
+            head.push_str(&crate::widgets::tr_fill(ui, " · pass {at} of {of}", &[("at", &at.to_string()), ("of", &of.to_string())]));
         }
         if st["atBreakpoint"] == true {
-            head.push_str(" · at a breakpoint");
+            head.push_str(crate::widgets::tr(ui, " · at a breakpoint"));
         }
         ui.label(egui::RichText::new(head).strong().color(t.text));
         let resolved = cur.get("params").or(cur.get("over")).or(cur.get("cell")).map(|p| p.to_string());
@@ -1316,16 +1340,23 @@ fn status_line(app: &SheetApp, ui: &mut Ui, ed: &Editor, t: &Tokens) {
         }
         let changed: Vec<&str> = st["changed"].as_array().into_iter().flatten().filter_map(Json::as_str).take(6).collect();
         ui.label(
-            egui::RichText::new(format!("Changed so far: {}", if changed.is_empty() { "nothing".into() } else { changed.join(", ") }))
-                .color(t.text_dim),
+            egui::RichText::new(crate::widgets::tr_fill(
+                ui,
+                "Changed so far: {cells}",
+                &[("cells", &if changed.is_empty() { crate::widgets::tr(ui, "nothing").to_owned() } else { changed.join(", ") })],
+            ))
+            .color(t.text_dim),
         );
     } else if let Some(text) = &ed.outcome {
         let bad = !ed.errors.is_empty() || ed.check.as_ref().is_some_and(|c| c["ok"] == false);
         ui.add(egui::Label::new(egui::RichText::new(text).color(if bad { t.danger } else { t.text })).wrap());
     } else {
         ui.label(
-            egui::RichText::new("Check shows on the grid what the macro reads and writes. Click a step's gutter to set a breakpoint.")
-                .color(t.text_dim),
+            egui::RichText::new(crate::widgets::tr(
+                ui,
+                "Check shows on the grid what the macro reads and writes. Click a step's gutter to set a breakpoint.",
+            ))
+            .color(t.text_dim),
         );
     }
     if app.grid.macro_overlay.is_some() {
@@ -1420,7 +1451,7 @@ fn step_list(app: &mut SheetApp, ui: &mut Ui, ed: &mut Editor, debugging: bool) 
             p.text(pos2(rect.left() + 48.0, rect.center().y), egui::Align2::RIGHT_CENTER, &row.key, theme::ui_font(11.5), t.text_dim);
             let (icon, cat) = category(&st);
             icons::paint(p, Rect::from_center_size(pos2(rect.left() + 62.0 + indent, rect.center().y), vec2(16.0, 16.0)), icon, t.cat(cat));
-            let text = summary(&st);
+            let text = summary(&st, app.ui.language);
             let text_color = if st.enabled { t.text } else { t.text_disabled };
             let text_left = rect.left() + 76.0 + indent;
             let text_clip = Rect::from_min_max(pos2(text_left, rect.top()), pos2(rect.right() - 46.0, rect.bottom()));
@@ -1595,7 +1626,7 @@ fn picker(ui: &mut Ui, ed: &mut Editor) {
     }
     let r = ui.add(
         egui::TextEdit::singleline(&mut pk.search)
-            .hint_text("Search commands, e.g. bold, sort, set…")
+            .hint_text(crate::widgets::tr(ui, "Search commands, e.g. bold, sort, set…"))
             .desired_width(f32::INFINITY)
             .id_salt("me_pick"),
     );
@@ -1647,7 +1678,7 @@ fn picker(ui: &mut Ui, ed: &mut Editor) {
 fn inspector(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor, debugging: bool) {
     ui.horizontal_wrapped(|ui| {
         for (tab, label) in [(Tab::Step, "Details"), (Tab::Inputs, "Inputs"), (Tab::Output, "Output")] {
-            if ui.selectable_label(ed.tab == tab, label).clicked() {
+            if ui.selectable_label(ed.tab == tab, crate::widgets::tr(ui, label)).clicked() {
                 ed.tab = tab;
             }
         }
@@ -1818,12 +1849,12 @@ fn step_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) {
         let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
         icons::paint(ui.painter(), r, icon, t.cat(cat));
         let title = match &st.kind {
-            StepKind::Command { id, .. } => command_label(id),
-            StepKind::Repeat { .. } => "Repeat".into(),
-            StepKind::If { .. } => "If".into(),
-            StepKind::Stop { .. } => "Stop".into(),
+            StepKind::Command { id, .. } => crate::widgets::tr(ui, &command_label(id)).to_owned(),
+            StepKind::Repeat { .. } => crate::widgets::tr(ui, "Repeat").into(),
+            StepKind::If { .. } => crate::widgets::tr(ui, "If").into(),
+            StepKind::Stop { .. } => crate::widgets::tr(ui, "Stop").into(),
         };
-        ui.label(egui::RichText::new(format!("Step {path} · {title}")).strong());
+        ui.label(egui::RichText::new(crate::widgets::tr_fill(ui, "Step {path} · {title}", &[("path", &path), ("title", &title)])).strong());
         if let StepKind::Command { id, .. } = &st.kind {
             ui.label(egui::RichText::new(id).monospace().color(t.text_dim));
             if ui.small_button(crate::widgets::tr(ui, "Change…")).clicked() {
@@ -1894,9 +1925,9 @@ fn step_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) {
                 (CompareOp::Contains, "contains"),
             ];
             let label = ops.iter().find(|(o, _)| *o == op).map_or("", |x| x.1);
-            craft_ui::ComboBox::from_id_salt(("me_op", &path)).selected_text(label).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt(("me_op", &path)).selected_text(crate::widgets::tr(ui, label)).show_ui(ui, |ui| {
                 for (o, l) in ops {
-                    ui.selectable_value(&mut op2, o, l);
+                    ui.selectable_value(&mut op2, o, crate::widgets::tr(ui, l));
                 }
             });
             let mut text = match &value {
@@ -2136,7 +2167,11 @@ fn inputs_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) 
         let headers = if k == 0 { example_headers(app, &ed.example, i.header) } else { vec![] };
         egui::Grid::new("me_types").num_columns(2).show(ui, |ui| {
             for c in 0..ncols {
-                let label = headers.get(c).filter(|h| !h.is_empty()).cloned().unwrap_or_else(|| format!("Column {}", c + 1));
+                let label = headers
+                    .get(c)
+                    .filter(|h| !h.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| crate::widgets::tr_fill(ui, "Column {n}", &[("n", &(c + 1).to_string())]));
                 ui.label(label);
                 let mut ty = i.col_types.get(c).copied().unwrap_or(ColType::Any);
                 let before_ty = ty;
@@ -2295,7 +2330,7 @@ fn output_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) 
     let anchor = ed.draft.output.anchor.clone().unwrap_or_default();
     ref_field(app, ui, d, ed, ("@output", "anchor"), &anchor, false);
     ui.label(
-        egui::RichText::new("Leave it empty when no step uses Output. A token such as Input.right keeps it beside the data.")
+        egui::RichText::new(crate::widgets::tr(ui, "Leave it empty when no step uses Output. A token such as Input.right keeps it beside the data."))
             .small()
             .color(t.text_dim),
     );
@@ -2309,7 +2344,7 @@ fn output_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) 
         (OnConflict::ShiftDown, "Shift the data down"),
         (OnConflict::ShiftRight, "Shift the data right"),
     ] {
-        ui.radio_value(&mut rule, r, label);
+        ui.radio_value(&mut rule, r, crate::widgets::tr(ui, label));
     }
     if rule != ed.draft.output.on_conflict {
         ed.draft.output.on_conflict = rule;
@@ -2322,7 +2357,7 @@ fn output_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) 
     );
     if !ed.draft.permissions.is_empty() {
         ui.add_space(6.0);
-        ui.label(format!("May use files through: {}", ed.draft.permissions.join(", ")));
+        ui.label(crate::widgets::tr_fill(ui, "May use files through: {list}", &[("list", &ed.draft.permissions.join(", "))]));
     }
 }
 
@@ -2530,13 +2565,13 @@ mod tests {
     #[test]
     fn summaries_and_categories() {
         let s = steps();
-        assert_eq!(summary(&s[0]), "Set A1 to x");
-        assert_eq!(summary(&s[1]), "Repeat for each row of Input");
-        assert_eq!(summary(&s[2]), "If B1 is empty");
+        assert_eq!(summary(&s[0], crate::i18n::Language::En), "Set A1 to x");
+        assert_eq!(summary(&s[1], crate::i18n::Language::En), "Repeat for each row of Input");
+        assert_eq!(summary(&s[2], crate::i18n::Language::En), "If B1 is empty");
         assert_eq!(category(&s[0]), (Icon::Sheet, Cat::Blue));
         assert_eq!(category(&s[1]).1, Cat::Purple);
         let long = Step::command("home.bold", json!({"range": "A1:B2"}));
-        assert!(summary(&long).contains("range: A1:B2"), "{}", summary(&long));
+        assert!(summary(&long, crate::i18n::Language::En).contains("range: A1:B2"), "{}", summary(&long, crate::i18n::Language::En));
     }
 
     #[test]

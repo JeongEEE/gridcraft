@@ -251,7 +251,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
         let mut chosen = false;
         egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
             for (id, label) in TOOLS {
-                let r = ui.selectable_label(pick == *id, *label);
+                let r = ui.selectable_label(pick == *id, crate::widgets::tr(ui, label));
                 if r.clicked() {
                     d.values.insert("pick".into(), json!(id));
                 }
@@ -282,7 +282,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
     for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
         ui.horizontal(|ui| {
-            let r = ui.radio(to == choice, text_label);
+            let r = ui.radio(to == choice, crate::widgets::tr(ui, text_label));
             if r.clicked() {
                 d.values.insert("outputTo".into(), json!(choice));
                 // Another output option ends picking into Output Range, so a later selection on
@@ -430,7 +430,7 @@ fn at_home(app: &mut SheetApp, d: &mut Dialog) -> bool {
 fn save_solver_model(app: &mut SheetApp, d: &mut Dialog, range: &str, overwrite: bool) {
     d.values.remove("askModelOverwrite");
     let note = match app.run("data.solverSaveModel", json!({"to": range.trim(), "model": build_params(d), "overwrite": overwrite})) {
-        Ok(r) => format!("The model was saved to {}.", r.get("range").and_then(Json::as_str).unwrap_or("")),
+        Ok(r) => app.ui.language.tr_fill("The model was saved to {range}.", &[("range", r.get("range").and_then(Json::as_str).unwrap_or(""))]),
         Err(e) if !overwrite && e.contains(gridcraft_engine::cmd::analysis::OVERWRITE_ERROR) => {
             d.values.insert("askModelOverwrite".into(), json!(range.trim()));
             crate::clean_error(&e)
@@ -465,7 +465,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
     ui.horizontal(|ui| {
         ui.label(crate::widgets::tr(ui, "To:"));
         for (g, label) in [("max", "Max"), ("min", "Min"), ("value", "Value Of:")] {
-            if ui.radio(goal == g, label).clicked() {
+            if ui.radio(goal == g, crate::widgets::tr(ui, label)).clicked() {
                 d.values.insert("goal".into(), json!(g));
             }
         }

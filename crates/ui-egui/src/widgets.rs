@@ -15,6 +15,11 @@ pub(crate) fn tr<'a>(ui: &Ui, text: &'a str) -> &'a str {
     i18n::current(ui.ctx()).tr(text)
 }
 
+/// [`tr`] for a template with `{name}` placeholders.
+pub(crate) fn tr_fill(ui: &Ui, template: &str, values: &[(&str, &str)]) -> String {
+    i18n::current(ui.ctx()).tr_fill(template, values)
+}
+
 /// Keyboard shortcuts shown after a ribbon tooltip's command name: Excel for Mac's on macOS,
 /// Excel for Windows' elsewhere (each one GridCraft binds). Only the name is translated.
 const TOOLTIP_SHORTCUTS: &[(&str, &str, &str)] = &[

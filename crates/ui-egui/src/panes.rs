@@ -96,7 +96,9 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
                             app.run_or_alert("review.resolveComment", json!({"cell": cell, "resolved": !c.resolved}));
                         }
                         let send = ui.small_button(crate::widgets::tr(ui, "Send")).clicked();
-                        let r = ui.add(egui::TextEdit::singleline(&mut draft).hint_text("Reply…").desired_width(ui.available_width()));
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut draft).hint_text(crate::widgets::tr(ui, "Reply…")).desired_width(ui.available_width()),
+                        );
                         if (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) || send) && !draft.is_empty() {
                             app.run_or_alert("review.replyComment", json!({"cell": cell, "text": draft}));
                             draft.clear();
@@ -179,13 +181,14 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     };
     let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
     let lang = crate::i18n::current(ui.ctx());
-    ui.collapsing("Chart Title", |ui| {
+    // The id stays English so the open state survives a language change.
+    egui::CollapsingHeader::new(crate::widgets::tr(ui, "Chart Title")).id_salt("Chart Title").show(ui, |ui| {
         let field = egui::Id::unique(("gridcraft.chart_title", id));
         if let Some(title) = crate::widgets::committed_text(ui, field, chart.title.as_deref().unwrap_or(""), None) {
             app.run_or_alert("chart.set", json!({"chart": id, "title": title}));
         }
     });
-    ui.collapsing("Chart Type", |ui| {
+    egui::CollapsingHeader::new(crate::widgets::tr(ui, "Chart Type")).id_salt("Chart Type").show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             for (l, k, s) in [
                 ("Column", "column", ""),
@@ -225,7 +228,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
-    ui.collapsing("Legend", |ui| {
+    egui::CollapsingHeader::new(crate::widgets::tr(ui, "Legend")).id_salt("Legend").show(ui, |ui| {
         ui.horizontal(|ui| {
             for (l, v) in [("None", "none"), ("Bottom", "bottom"), ("Top", "top"), ("Left", "left"), ("Right", "right")] {
                 let cur = format!("{:?}", chart.legend).eq_ignore_ascii_case(v);
@@ -235,7 +238,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
-    ui.collapsing("Elements", |ui| {
+    egui::CollapsingHeader::new(crate::widgets::tr(ui, "Elements")).id_salt("Elements").show(ui, |ui| {
         let mut dl = chart.data_labels;
         if ui.checkbox(&mut dl, crate::widgets::tr(ui, "Data Labels")).changed() {
             app.run_or_alert("chart.set", json!({"chart": id, "dataLabels": dl}));
@@ -259,7 +262,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
-    ui.collapsing("Data Table", |ui| {
+    egui::CollapsingHeader::new(crate::widgets::tr(ui, "Data Table")).id_salt("Data Table").show(ui, |ui| {
         let supported = chart.supports_data_table();
         let mut on = chart.data_table.is_some();
         if ui.add_enabled(supported, egui::Checkbox::new(&mut on, "Show Data Table")).changed() {
@@ -275,16 +278,20 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 ("Vertical Borders", "dataTableVerticalBorder", table.vertical_border),
                 ("Outline", "dataTableOutline", table.outline),
             ] {
-                if ui.checkbox(&mut value, label).changed() {
+                if ui.checkbox(&mut value, crate::widgets::tr(ui, label)).changed() {
                     app.run_or_alert("chart.set", json!({"chart": id, key: value}));
                 }
             }
         }
     });
-    ui.collapsing("Series", |ui| {
+    egui::CollapsingHeader::new(crate::widgets::tr(ui, "Series")).id_salt("Series").show(ui, |ui| {
         let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), &chart));
         for (i, s) in chart.series.iter().enumerate() {
-            let name = data.as_ref().and_then(|d| d.series.get(i)).map(|x| x.name.clone()).unwrap_or_else(|| format!("Series {}", i + 1));
+            let name = data
+                .as_ref()
+                .and_then(|d| d.series.get(i))
+                .map(|x| x.name.clone())
+                .unwrap_or_else(|| crate::widgets::tr_fill(ui, "Series {n}", &[("n", &(i + 1).to_string())]));
             let col =
                 data.as_ref().and_then(|d| d.series.get(i)).map(|x| Color32::from_rgb(x.color[0], x.color[1], x.color[2])).unwrap_or(Color32::GRAY);
             ui.horizontal(|ui| {
@@ -304,23 +311,32 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             });
         }
     });
-    ui.collapsing("Colors & Layout", |ui| {
+    egui::CollapsingHeader::new(crate::widgets::tr(ui, "Colors & Layout")).id_salt("Colors & Layout").show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
-            for p in ["colorful", "monochrome", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6"] {
-                if ui.button(p).clicked() {
+            for (label, p) in [
+                ("Colorful", "colorful"),
+                ("Monochromatic", "monochrome"),
+                ("Accent 1", "accent1"),
+                ("Accent 2", "accent2"),
+                ("Accent 3", "accent3"),
+                ("Accent 4", "accent4"),
+                ("Accent 5", "accent5"),
+                ("Accent 6", "accent6"),
+            ] {
+                if ui.button(crate::widgets::tr(ui, label)).clicked() {
                     app.run_or_alert("chart.changeColors", json!({"chart": id, "palette": p}));
                 }
             }
         });
         ui.horizontal(|ui| {
             for n in 1..=6 {
-                if ui.button(format!("Layout {n}")).clicked() {
+                if ui.button(crate::widgets::tr_fill(ui, "Layout {n}", &[("n", &n.to_string())])).clicked() {
                     app.run_or_alert("chart.quickLayout", json!({"chart": id, "layout": n}));
                 }
             }
         });
     });
-    ui.collapsing("Size", |ui| {
+    egui::CollapsingHeader::new(crate::widgets::tr(ui, "Size")).id_salt("Size").show(ui, |ui| {
         // Keep the value being typed or dragged between frames; reloading it from the chart every frame threw the edit away.
         let draft = egui::Id::unique(("gridcraft.chart_size_draft", id));
         let current = (chart.anchor.width, chart.anchor.height);
