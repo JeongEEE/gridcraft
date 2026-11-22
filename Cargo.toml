@@ -135,4 +135,6 @@ egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev
 eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+# Grid: storytold/winit a517b384 + the macOS Korean jamo fix (JeongEEE/winit, branch grid/korean-ime).
+# When upstream moves winit, rebase that branch onto the new storytold rev and update this rev.
+winit = { git = "https://github.com/JeongEEE/winit.git", rev = "98413849b18ca9ae5fb79a66b7721063b694462b" }
