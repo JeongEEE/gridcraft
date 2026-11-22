@@ -9,7 +9,7 @@ description = "Authenticated updates for the personal Grid fork"
 workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-update = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "=0.1.0" }
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", version = "=0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 ring = "=0.17.14"

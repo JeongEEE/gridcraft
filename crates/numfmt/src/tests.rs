@@ -668,7 +668,7 @@ fn text_uncached(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellE
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, false);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
@@ -896,8 +896,6 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
 }
-
-const JAN_1_2001: f64 = 36892.0;
 
 #[test]
 fn b1_prefix_is_hidden_and_gregorian() {

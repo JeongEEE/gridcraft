@@ -105,3 +105,17 @@ fn streaming_does_not_remove_the_node_bound_inside_one_anchor() {
     assert!(wb.sheet(0).unwrap().images.is_empty());
     assert!(report.warnings.iter().any(|w| w.contains("more than 1000000 elements")), "{:?}", report.warnings);
 }
+
+#[test]
+fn top_level_alternate_content_reads_its_first_choice_once() {
+    // Streaming splits only bare anchors; a wrapped one must still be read, from one branch.
+    let wrapped = format!(
+        r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="a14">{}</mc:Choice><mc:Fallback>{}{}</mc:Fallback></mc:AlternateContent>"#,
+        anchor(3),
+        anchor(4),
+        anchor(5)
+    );
+    let (wb, _) = read_xlsx(&package(&format!("{}{wrapped}", anchor(2)))).unwrap();
+    let images = &wb.sheet(0).unwrap().images;
+    assert_eq!(images.len(), 2, "the bare anchor and the choice's anchor, not the fallback's");
+}

@@ -1,9 +1,12 @@
 use super::geo::Geo;
+use super::interact::object_key;
 use super::menus::is_checkbox;
 use super::{CellRef, Drag, Sheet, SheetApp, json};
 
-/// Grid keyboard handling when no text field has focus.
-pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+/// Whether something other than the grid owns the keyboard this frame: an editor, a dialog, a
+/// message, a menu or another focused widget. Kept out of [`keyboard`] to hold its complexity
+/// within the workspace limit.
+fn keyboard_elsewhere(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response) -> bool {
     // Focus left on an editor that no longer exists goes back to the grid.
     // The idle grid and the in-cell editor share an input owner. Changing owners when the
     // first preedit arrives asks egui to cancel the very native composition opening the edit.
@@ -17,7 +20,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
     // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
     // arrow key would move the selection the menu fills from), and a macro's question.
-    if editing
+    editing
         || app.dialog.is_some()
         || other_focus
         || app.message.is_some()
@@ -25,9 +28,14 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         || app.grid.fill_menu.is_some()
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
         || app.macros.question.is_some()
-    {
+}
+
+/// Grid keyboard handling when no text field has focus.
+pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+    if keyboard_elsewhere(app, ctx, resp) {
         return;
     }
+    let input_id = egui::Id::unique("gridcraft.cell_editor");
     if ctx.memory(|m| m.focused()).is_none_or(|f| f == resp.id) {
         ctx.memory_mut(|m| m.request_focus(input_id));
     }
@@ -50,6 +58,11 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // a shortcut ran, that text must not start an edit over what it just did.
     let mut shortcut_ran = false;
     for ev in events {
+        // IME events are handled outside the match to keep this loop's complexity down. Other
+        // IME events (delete-surrounding, an empty preedit) fall through to `_ => {}` below.
+        if handle_ime_start(app, ctx, &ev) {
+            return;
+        }
         match ev {
             egui::Event::Copy => {
                 app.copy_to_clipboard(ctx, "edit.copy");
@@ -69,20 +82,20 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 // must not be replayed into that new draft later in the same frame.
                 ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
             }
-            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text))
-                if !text.is_empty() && text.chars().all(|c| !c.is_control()) =>
-            {
-                begin_ime_edit(app, ctx);
-                return;
-            }
+            // A space on a checkbox cell toggles it (the `Key::Space` arm below). The same key
+            // press also arrives as text, and typing text starts editing the cell -- so the cell
+            // toggled *and* opened an editor holding a space, which Enter then committed over the
+            // checkbox (#1951).
+            egui::Event::Text(text) if text == " " && is_checkbox(sh, app) => {}
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
                 begin_text_edit(app, ctx, text);
                 return;
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
-                if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
-                    shortcut_ran = true;
+                let nudged = object_key(app, sh, key, m);
+                if nudged || crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
+                    shortcut_ran |= !nudged;
                     continue;
                 }
                 let cmd = m.command;
@@ -160,7 +173,9 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     // Ctrl+Shift+letter (⌘⇧letter) runs the macro with that shortcut, unless GridCraft uses it.
                     _ if cmd && shift && !m.alt && crate::macro_ui::run_shortcut(app, key) => {}
                     _ if cmd && !crate::keymap::altgr_text(ctx, m, ctx.os() == egui::os::OperatingSystem::Mac) => {
-                        crate::ribbon::shortcut(app, key, m)
+                        // The same key the English table reads: Ctrl+Shift+, typing `;` is Ctrl+;.
+                        let (key, shift) = crate::keymap::us_key(key, physical_key, shift).unwrap_or((key, shift));
+                        crate::ribbon::shortcut(app, key, egui::Modifiers { shift, ..m });
                     }
                     _ => {}
                 }
@@ -173,6 +188,16 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
 /// A selected cell accepts text before its editor exists. Enabling the native IME only after
 /// the first Text event can cancel Korean's first syllable.
 fn enable_grid_ime(app: &SheetApp, ctx: &egui::Context, geo: &Geo, sh: &Sheet, input_id: egui::Id) {
+    let Some(doc) = app.session.active() else { return };
+    let active = doc.selection.active;
+    let merged = sh.merge_at(active);
+    // `begin_edit` refuses a locked cell on a protected sheet. Publishing an IME request for
+    // one would let the user compose text that is then discarded, so skip it up front, using
+    // the same merged-cell anchor and protection check as `SheetApp::begin_edit`.
+    let anchor = merged.map(|m| m.start).unwrap_or(active);
+    if app.session.locked_cell_message(doc.wb.active_sheet(), anchor).is_some() {
+        return;
+    }
     let generation_id = input_id.with("ime_generation");
     let pass = ctx.cumulative_pass_nr().max(1);
     let gained_focus = ctx.memory(|m| m.has_focus(input_id) && !m.had_focus_last_frame(input_id));
@@ -182,12 +207,28 @@ fn enable_grid_ime(app: &SheetApp, ctx: &egui::Context, geo: &Geo, sh: &Sheet, i
         }
         d.get_temp::<u64>(generation_id).unwrap_or(1)
     });
-    if let Some(doc) = app.session.active() {
-        let rect = geo.mirror_rect(geo.cell_rect(sh, doc.selection.active));
-        ctx.output_mut(|o| {
-            o.ime = Some(egui::output::IMEOutput::new(input_id, generation, egui::IMEPurpose::Normal, rect, rect));
-        });
+    // `IMEOutput` needs screen coordinates: mirrored on a right-to-left sheet, where `rect.min`
+    // is still the screen-side start of the cell and so where the caret belongs.
+    let rect = match merged {
+        Some(m) => geo.mirror_rect(geo.range_rect(sh, m)),
+        None => geo.mirror_rect(geo.cell_rect(sh, active)),
+    };
+    let cursor_rect = egui::Rect::from_min_size(rect.min, egui::vec2(1.0, rect.height()));
+    ctx.output_mut(|o| {
+        o.ime = Some(egui::output::IMEOutput::new(input_id, generation, egui::IMEPurpose::Normal, rect, cursor_rect));
+    });
+}
+
+/// Open the editor on the first preedit or commit of a composition, if `ev` is one. The editor's
+/// `TextEdit` then takes that same IME event, so the first syllable is composed in the cell.
+/// Returns whether the caller should stop handling this frame's events.
+fn handle_ime_start(app: &mut SheetApp, ctx: &egui::Context, ev: &egui::Event) -> bool {
+    let egui::Event::Ime(egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text)) = ev else { return false };
+    if text.is_empty() || text.chars().any(char::is_control) {
+        return false;
     }
+    begin_ime_edit(app, ctx);
+    true
 }
 
 fn begin_ime_edit(app: &mut SheetApp, ctx: &egui::Context) {
